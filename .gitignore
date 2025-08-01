@@ -1,0 +1,42 @@
+# 1. Ambiente Virtual e Dependências
+# Ignora a pasta do ambiente virtual, que é específica da sua máquina.
+venv/
+/venv/
+
+# 2. Arquivos de Cache e Compilados do Python
+# Ignora os arquivos temporários que o Python cria.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 3. Dados e Artefatos de Execução
+# O repositório deve conter apenas o CÓDIGO, nunca os DADOS.
+# Estas pastas devem estar vazias no repositório.
+/data_input/
+/data_output/
+/data_test/
+/logs/
+/logs_teste/
+
+# Ignora arquivos de estado, relatórios e arquivos de dados
+state.json
+*.xlsx
+*.csv
+*.txt
+*.ipynb
+
+# 4. Arquivos de Configuração de IDE
+# Ignora as configurações específicas do seu VS Code.
+.vscode/
+
+# 5. Arquivos de Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# 6. Scripts de Validação e Documentos Temporários
+*.sh
+*.md
+# Exceção para o README principal
+!README.md
+
