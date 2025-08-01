@@ -10,14 +10,8 @@ __pycache__/
 *.pyo
 *.pyd
 
-# 3. Dados e Artefatos de Execução
-# O repositório deve conter apenas o CÓDIGO, nunca os DADOS.
-# Estas pastas devem estar vazias no repositório.
-/data_input/
-/data_output/
-/data_test/
-/logs/
-/logs_teste/
+
+
 
 # Ignora arquivos de estado, relatórios e arquivos de dados
 state.json
