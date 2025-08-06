@@ -1,11 +1,9 @@
-# python-etl-mailing-automation
-
 <div align="center">
 
 [![Licença](https://img.shields.io/badge/licença-GPL%20v3-blue.svg)](LICENSE.txt)
 [![Python](https://img.shields.io/badge/python-3.8+-green.svg)](https://www.python.org/)
-[![Estrelas](https://img.shields.io/github/stars/AndreBFarias/Energisa-Automacao-Mailing.svg?style=social)](https://github.com/AndreBFarias/Energisa-Automacao-Mailing/stargazers)
-[![Contribuições](https://img.shields.io/badge/contribuições-bem--vindas-brightgreen.svg)](https://github.com/AndreBFarias/Energisa-Automacao-Mailing/issues)
+[![Estrelas](https://img.shields.io/github/stars/AndreBFarias/Automacao-Mailing.svg?style=social)](https://github.com/AndreBFarias/python-etl-mailing-automation/stargazers)
+[![Contribuições](https://img.shields.io/badge/contribuições-bem--vindas-brightgreen.svg)](https://github.com/AndreBFarias/python-etl-mailing-automation/issues)
 
 <div style="text-align: center;">
   <h1 style="font-size: 2em;">Pipeline de Automação de Mailing</h1>
@@ -38,8 +36,13 @@ Para esta versão, que é ideal para ambientes controlados e testes locais:
 
 1.  **Clone o repositório:**
     ```bash
+<<<<<<< HEAD
     git clone [https://github.com/AndreBFarias/Energisa-Automacao-Mailing.git](https://github.com/AndreBFarias/Energisa-Automacao-Mailing.git)
     cd Energisa-Automacao-Mailing
+=======
+    git clone [https://github.com/AndreBFarias/python-etl-mailing-automation.git](https://github.com/AndreBFarias/python-etl-mailing-automation.git)
+    cd python-etl-mailing-automation
+>>>>>>> e4b9d06be8eb10b6f3410fe4f1fcd1fdc441e644
     ```
 2.  **Crie um ambiente virtual e instale as dependências:**
     ```bash
@@ -57,7 +60,11 @@ Para esta versão, que é ideal para ambientes controlados e testes locais:
 Para esta versão, que é ideal para execução em nuvem, especialmente com grandes volumes de dados, uma versão unificada em Notebook (`Mailing_Automação.ipynb`) foi criada.
 
 1.  **Acesse o Colab:** Abra o Google Colab e crie um novo notebook, ou carregue o arquivo `Mailing_Automação.ipynb` do seu repositório.
+<<<<<<< HEAD
 2.  **Organize os Arquivos:** Crie a pasta `mailing-energisa` no seu Google Drive. Dentro dela, crie as subpastas `data_input`, `data_output` e `logs`, conforme a configuração no script. Coloque todos os arquivos de entrada (`.xlsx`, `.csv`, `.txt`) na pasta `data_input` do Drive.
+=======
+2.  **Organize os Arquivos:** Crie a pasta `mailing` no seu Google Drive. Dentro dela, crie as subpastas `data_input`, `data_output` e `logs`, conforme a configuração no script. Coloque todos os arquivos de entrada (`.xlsx`, `.csv`, `.txt`) na pasta `data_input` do Drive.
+>>>>>>> e4b9d06be8eb10b6f3410fe4f1fcd1fdc441e644
 3.  **Execute o Notebook:** O script do Notebook foi projetado para ser executado célula por célula, seguindo a ordem. A primeira célula irá instalar as dependências e a segunda irá montar seu Google Drive, permitindo que o script acesse os arquivos diretamente.
 4.  **Atenção à Performance:** A versão do Notebook utiliza `Modin` para paralelismo, garantindo uma performance otimizada para o processamento de grandes arquivos.
 
@@ -76,4 +83,8 @@ Este projeto é regido pela Licença Pública Geral GNU v3. Em essência, isso s
 
 A licença GPL não permite que seu programa seja incorporado a programas proprietários.
 
+<<<<<<< HEAD
 O software é fornecido sem garantia de qualquer tipo. Você assume o risco total pela qualidade e desempenho do programa.
+=======
+O software é fornecido sem garantia de qualquer tipo. Você assume o risco total pela qualidade e desempenho do programa.ener
+>>>>>>> e4b9d06be8eb10b6f3410fe4f1fcd1fdc441e644
