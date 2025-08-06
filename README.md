@@ -1,5 +1,3 @@
-# python-etl-mailing-automation
-
 <div align="center">
 
 [![Licença](https://img.shields.io/badge/licença-GPL%20v3-blue.svg)](LICENSE.txt)
