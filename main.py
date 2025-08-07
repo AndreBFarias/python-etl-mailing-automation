@@ -2,37 +2,35 @@ import logging
 from src.logger_setup import setup_logger
 from src.config_manager import load_config, validate_config
 from src.state_manager import read_state, write_state
-from src.data_loader import load_all_data
+# 5. Importação da nova exceção e do loader atualizado
+from src.data_loader import load_all_data, SchemaValidationError
 from src.processing_pipeline import processar_dados 
 from src.data_exporter import exportar_dados
 from datetime import datetime
+import sys
 
 def main():
     """Função principal que orquestra todo o processo de automação."""
     config = None
     try:
-        # Carrega e valida a configuração primeiro
         config = load_config('config.ini')
         validate_config(config)
-        
-        # Configura o logger com base no arquivo .ini
         setup_logger(config.get('PATHS', 'log_dir'), config.get('SETTINGS', 'log_level'))
     
     except (FileNotFoundError, ValueError) as e:
-        # Se a configuração falhar, o log não estará disponível. Imprime no console.
         print(f"ERRO CRÍTICO NA CONFIGURAÇÃO: {e}\nProcesso abortado.")
-        return # Encerra a execução
+        sys.exit(1)
 
     try:
         logging.info("="*30 + " INÍCIO DO PROCESSO DE AUTOMAÇÃO " + "="*30)
         state_file_path = config.get('PATHS', 'state_file')
-        state = read_state(state_file_path) # Lê o estado, mas não age sobre ele ainda
+        state = read_state(state_file_path)
 
-        logging.info("--- ESTÁGIO 1: Carregando arquivos de dados ---")
+        logging.info("--- ESTÁGIO 1: Carregando e Validando arquivos de dados ---")
         all_dataframes = load_all_data(config)
         logging.info("--- ESTÁGIO 1 CONCLUÍDO ---")
 
-        logging.info("--- ESTÁGIO 2: Processando dados (Alquimia) ---")
+        logging.info("--- ESTÁGIO 2: Processando dados ---")
         df_final = processar_dados(all_dataframes, config)
         logging.info("--- ESTÁGIO 2 CONCLUÍDO ---")
 
@@ -43,7 +41,6 @@ def main():
             exportar_dados(df_final, config)
             logging.info("--- ESTÁGIO 3 CONCLUÍDO ---")
         
-        # Atualiza o estado para registrar uma execução bem-sucedida
         success_state = {
             'last_successful_run': datetime.now().isoformat(),
             'status': 'COMPLETED'
@@ -52,12 +49,13 @@ def main():
         
         logging.info("="*30 + " PROCESSO DE AUTOMAÇÃO CONCLUÍDO COM SUCESSO " + "="*30)
 
-    except FileNotFoundError as e:
-        logging.critical(f"ERRO FATAL: Arquivo necessário não encontrado. {e}")
-        logging.critical("O processo foi interrompido.")
+    # 6. Captura do Erro de Schema
+    except (FileNotFoundError, SchemaValidationError) as e:
+        # A mensagem de erro já vem formatada da exceção, então apenas a logamos.
+        logging.critical(f"\n\n{e}\n")
+        sys.exit(1)
     except Exception as e:
         logging.critical(f"ERRO INESPERADO E NÃO TRATADO NO FLUXO PRINCIPAL: {e}", exc_info=True)
-        # Atualiza o estado para registrar a falha
         if config:
             state_file_path = config.get('PATHS', 'state_file')
             error_state = {
@@ -67,8 +65,8 @@ def main():
             }
             write_state(state_file_path, error_state)
         logging.critical("O processo foi interrompido devido a um erro crítico.")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
-
 
