@@ -18,7 +18,7 @@ def exportar_dados(df_final: pd.DataFrame, config: ConfigParser):
     if 'PRODUTO' not in df_final.columns or df_final['PRODUTO'].isnull().all():
         logger.error("Coluna 'PRODUTO' não encontrada ou vazia no DataFrame final. Não é possível particionar.")
         fallback_path = output_dir / f"{prefix}GERAL_{date_str}.csv"
-        # 1
+        # O DataFrame já chega formatado, então a exportação permanece simples.
         df_final.to_csv(fallback_path, sep=';', index=False, encoding='utf-8-sig', lineterminator='\r\n')
         logger.warning(f"Arquivo de fallback salvo em: {fallback_path}")
         return
@@ -32,9 +32,8 @@ def exportar_dados(df_final: pd.DataFrame, config: ConfigParser):
         output_path = output_dir / file_name
         
         logger.info(f"Exportando {len(data)} linhas para o produto '{produto}' em '{output_path}'...")
-        # 1
+        # O DataFrame já chega formatado, então a exportação permanece simples.
         data.to_csv(output_path, sep=';', index=False, encoding='utf-8-sig', lineterminator='\r\n')
 
     logger.info("Exportação de dados concluída com sucesso.")
-
 
