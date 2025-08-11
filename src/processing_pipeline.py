@@ -27,7 +27,7 @@ def _limpar_cpf(cpf_series: pd.Series) -> pd.Series:
         return cpf_series
     return cpf_series.astype(str).str.replace(r'\D', '', regex=True)
 
-# --- FUNÇÕES DE PROCESSAMENTO (Com ajustes) ---
+# --- FUNÇÕES DE PROCESSAMENTO (Estrutura mantida) ---
 
 def _remover_duplicatas(df: pd.DataFrame, chave_primaria: str) -> tuple[pd.DataFrame, str]:
     if chave_primaria not in df.columns:
@@ -155,12 +155,46 @@ def _calcular_colunas_agregadas(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+# --- NOVO UPDATE (08/08/2025): Adiciona a coluna CLIENTE_EM_NEGOCIACAO ---
+# Esta função foi criada para encapsular a lógica de verificação de negociação.
+def _adicionar_cliente_em_negociacao(df_mailing: pd.DataFrame, df_negociacao: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """Verifica quais clientes estão no arquivo de negociação e cria a flag correspondente."""
+    if df_negociacao is None or df_negociacao.empty:
+        msg = "AVISO: Arquivo de negociação não encontrado ou vazio. A coluna 'CLIENTE_EM_NEGOCIACAO' será preenchida com 'NÃO'."
+        logger.warning(msg)
+        df_mailing['CLIENTE_EM_NEGOCIACAO'] = 'NÃO'
+        return df_mailing, msg
+
+    logger.info("Verificando clientes na base de negociação.")
+    
+    df_negociacao_std = _standardize_columns(df_negociacao.copy())
+    
+    chave_mailing = 'uc'
+    chave_negociacao = 'cdcdebito'
+
+    if chave_mailing not in df_mailing.columns or chave_negociacao not in df_negociacao_std.columns:
+        msg = f"ERRO: Coluna de merge ('{chave_mailing}' ou '{chave_negociacao}') não encontrada. Etapa de negociação abortada."
+        logger.error(msg)
+        df_mailing['CLIENTE_EM_NEGOCIACAO'] = 'NÃO'
+        return df_mailing, msg
+
+    df_mailing[chave_mailing] = df_mailing[chave_mailing].astype(str)
+    df_negociacao_std[chave_negociacao] = df_negociacao_std[chave_negociacao].astype(str)
+
+    clientes_em_negociacao = set(df_negociacao_std[chave_negociacao].unique())
+    
+    df_mailing['CLIENTE_EM_NEGOCIACAO'] = df_mailing[chave_mailing].apply(lambda x: 'SIM' if x in clientes_em_negociacao else 'NÃO')
+    
+    sim_count = (df_mailing['CLIENTE_EM_NEGOCIACAO'] == 'SIM').sum()
+    msg = f"Verificação de Negociação: {sim_count} clientes encontrados na base de negociação."
+    logger.info(msg)
+    return df_mailing, msg
+
 def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     logger.info("Aplicando ajustes finais de layout, mapeamento e formatação.")
     report_msgs = []
     df_ajustado = df.copy()
 
-    # AJUSTE 1: Lógica de Coalesce para 'Cliente_Regulariza'
     fonte_regulariza = None
     if 'venc_maior_1ano' in df_ajustado.columns:
         fonte_regulariza = 'venc_maior_1ano'
@@ -179,25 +213,32 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         report_msgs.append(msg)
         df_ajustado['Cliente_Regulariza'] = 'NÃO'
 
-    # AJUSTE 2: Mapear 'loc' para 'LOCALIDADE' e outras colunas
     mapa_renomeacao = {
         'nomecad': 'NOME_CLIENTE', 'empresa': 'PRODUTO', 'ncpf': 'CPF',
         'totfat': 'parcelasEmAtraso', 'valordivida': 'valorDivida',
         'quantidade_uc_por_cpf': 'Quantidade_UC_por_CPF', 'ucs_do_cpf': 'Ucs_do_CPF',
-        'loc': 'LOCALIDADE', # Mapeamento direto de 'loc'
+        'loc': 'LOCALIDADE', 
+        'cep_endereco_da_uc': 'CEP_Endereco_da_UC',
         'quantidades_de_acionamentos': 'Quantidades_de_Acionamentos',
         'telefone_01': 'TELEFONE_01', 'telefone_02': 'TELEFONE_02',
         'telefone_03': 'TELEFONE_03', 'telefone_04': 'TELEFONE_04',
     }
     df_ajustado.rename(columns=mapa_renomeacao, inplace=True)
-    report_msgs.append("Renomeação de colunas (incluindo 'loc' -> 'LOCALIDADE') aplicada.")
+    report_msgs.append("Renomeação de colunas para o layout final aplicada.")
 
-    # AJUSTE 3: Reordenar colunas
+    # --- NOVO UPDATE (08/08/2025): Atualiza a ordem das colunas principais ---
+    # A lista antiga foi comentada para manter o histórico, conforme solicitado.
+    # colunas_principais_antigas = [
+    #     'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtraso', 'Quantidade_UC_por_CPF',
+    #     'Ucs_do_CPF', 'LOCALIDADE', 'valorDivida', 'Cliente_Regulariza', 'TELEFONE_01',
+    #     'TELEFONE_02', 'TELEFONE_03', 'TELEFONE_04', 'Quantidades_de_Acionamentos',
+    #     'Data_de_Importacao'
+    # ]
     colunas_principais = [
         'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtraso', 'Quantidade_UC_por_CPF',
-        'Ucs_do_CPF', 'LOCALIDADE', 'valorDivida', 'Cliente_Regulariza', 'TELEFONE_01',
-        'TELEFONE_02', 'TELEFONE_03', 'TELEFONE_04', 'Quantidades_de_Acionamentos',
-        'Data_de_Importacao'
+        'Ucs_do_CPF', 'CEP_Endereco_da_UC', 'valorDivida', 'TELEFONE_01', 'TELEFONE_02',
+        'TELEFONE_03', 'TELEFONE_04', 'Quantidades_de_Acionamentos', 'Data_de_Importacao',
+        'CLIENTE_EM_NEGOCIACAO'
     ]
     
     for col in colunas_principais:
@@ -209,20 +250,36 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     ordem_final = colunas_principais + outras_colunas
     df_ajustado = df_ajustado[ordem_final]
     report_msgs.append(f"Reordenação de colunas aplicada. Total de {len(ordem_final)} colunas no arquivo final.")
-
-    # AJUSTE 4: Formatar números
-    logger.info("Formatando colunas numéricas para remover '.0' de inteiros.")
-    for col in df_ajustado.columns:
-        if pd.api.types.is_numeric_dtype(df_ajustado[col]):
-            df_ajustado[col] = df_ajustado[col].apply(
-                lambda x: int(x) if pd.notna(x) and x == int(x) else x
-            )
-            df_ajustado[col] = df_ajustado[col].astype(str).replace('nan', '')
-    report_msgs.append("Formatação de números para remover '.0' concluída.")
-
+    
+    # A lógica de formatação de números foi movida para uma função dedicada.
+    # O trecho antigo que estava aqui foi removido para evitar redundância.
+    
     return df_ajustado, report_msgs
 
-# --- FUNÇÃO ORQUESTRADORA DO PIPELINE ---
+# --- NOVO UPDATE (08/08/2025): Função dedicada para remover o '.0' de todas as colunas ---
+# Esta função garante que a formatação seja a última etapa antes da exportação.
+def _formatar_numeros_para_exportacao(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """
+    Itera sobre todas as colunas do DataFrame e converte valores numéricos
+    que são inteiros (ex: 123.0) para strings sem a casa decimal.
+    Valores nulos são convertidos para strings vazias.
+    """
+    logger.info("Iniciando formatação final de números para exportação (remoção de '.0').")
+    df_formatado = df.copy()
+    
+    for col in df_formatado.columns:
+        # Aplica a transformação em cada célula da coluna
+        df_formatado[col] = df_formatado[col].apply(
+            lambda x: str(int(x)) if isinstance(x, (int, float)) and pd.notna(x) and x == int(x) else x
+        )
+        # Garante que valores nulos se tornem strings vazias no CSV
+        df_formatado[col] = df_formatado[col].fillna('').astype(str)
+
+    msg = "Formatação final de números para remover '.0' concluída."
+    logger.info(msg)
+    return df_formatado, msg
+
+# --- FUNÇÃO ORQUESTRADORA DO PIPELINE (ATUALIZADA) ---
 
 def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -> pd.DataFrame:
     relatorio_final = ["\n" + "="*25 + " RELATÓRIO FINAL DA ALQUIMIA " + "="*25]
@@ -236,10 +293,6 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
     
     df_processado = _standardize_columns(df_processado)
     
-    for key in ['pagamentos', 'negociacao']:
-        if key in dataframes and not dataframes[key].empty:
-            dataframes[key] = _standardize_columns(dataframes[key])
-    
     df_processado, msg_duplicatas = _remover_duplicatas(df_processado, 'ncpf')
     relatorio_final.append(f"2. {msg_duplicatas}")
     
@@ -251,15 +304,24 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
     
     df_processado, msg_enriquecimento = _enriquecer_telefones(df_processado, dataframes)
     relatorio_final.append(f"5. {msg_enriquecimento}")
+
+    # --- NOVO UPDATE (08/08/2025): Adiciona a verificação de negociação ---
+    df_processado, msg_negociacao = _adicionar_cliente_em_negociacao(df_processado, dataframes.get('negociacao'))
+    relatorio_final.append(f"6. {msg_negociacao}")
     
     df_processado['Data_de_Importacao'] = datetime.now().strftime('%d/%m/%Y')
 
     df_final, msgs_ajustes = _aplicar_ajustes_finais(df_processado)
-    relatorio_final.append("6. Ajustes Finais de Layout:")
+    relatorio_final.append("7. Ajustes Finais de Layout:")
     for msg in msgs_ajustes:
         relatorio_final.append(f"   - {msg}")
         
-    relatorio_final.append(f"7. Registros Finais para Exportação: {len(df_final)}")
+    # --- NOVO UPDATE (08/08/2025): Aplica a formatação final de números como última etapa ---
+    # O trecho antigo de formatação foi removido de _aplicar_ajustes_finais e agora reside aqui.
+    df_final, msg_formatacao = _formatar_numeros_para_exportacao(df_final)
+    relatorio_final.append(f"8. {msg_formatacao}")
+
+    relatorio_final.append(f"9. Registros Finais para Exportação: {len(df_final)}")
     relatorio_final.append("="*75 + "\n")
     
     for linha in relatorio_final:
