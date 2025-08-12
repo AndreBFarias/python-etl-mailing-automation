@@ -87,6 +87,12 @@ def _enriquecer_telefones(df_mailing: pd.DataFrame, dataframes: dict) -> tuple[p
         logger.warning(msg)
         return df_mailing, msg
 
+    # --- AJUSTE CIRÚRGICO #2: Lógica de leitura robusta para o arquivo de pontuação ---
+    # Comentando a lógica antiga para manter o histórico
+    # df_p100 = dataframes['enriquecimento'].get('100', pd.DataFrame())
+    # df_p50 = dataframes['enriquecimento'].get('50', pd.DataFrame())
+
+    # Nova lógica: Busca por abas que contenham '100' ou '50' em seus nomes
     df_enriquecimento_dict = dataframes.get('enriquecimento', {})
     df_p100 = pd.DataFrame()
     df_p50 = pd.DataFrame()
@@ -230,15 +236,20 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     return df_ajustado, report_msgs
 
 def _formatar_e_limpar_para_exportacao(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    logger.info("Iniciando formatação e limpeza final para exportação.")
+    logger.info("Iniciando formatação e limpeza final para exportação (remoção de '.0' e 'nan').")
     df_formatado = df.copy()
     
     for col in df_formatado.columns:
+        # Converte tudo para string para preservar a formatação original (como datas)
         s = df_formatado[col].astype(str)
+        
+        # Remove .0 do final dos números que são inteiros
         s = s.str.replace(r'\.0$', '', regex=True)
+        
+        # Substitui as várias representações de nulo por uma string vazia
         s = s.str.replace(r'^(nan|none|nat)$', '', case=False, regex=True)
         
-        # --- AJUSTE CIRÚRGICO FINAL: Correção precisa de encoding ---
+        # --- AJUSTE CIRÚRGICO #3: Correção de encoding ---
         # Substitui a representação incorreta 'NÃƒO' pela correta 'NÃO'
         s = s.str.replace('NÃƒO', 'NÃO', regex=False)
         
