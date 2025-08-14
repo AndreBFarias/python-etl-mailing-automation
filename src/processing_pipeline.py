@@ -234,15 +234,28 @@ def _formatar_e_limpar_para_exportacao(df: pd.DataFrame) -> tuple[pd.DataFrame, 
     df_formatado = df.copy()
     
     for col in df_formatado.columns:
+        # Pula a coluna 'valorDivida' neste loop para tratá-la separadamente depois.
+        if col == 'valorDivida':
+            continue
         s = df_formatado[col].astype(str)
         s = s.str.replace(r'\.0$', '', regex=True)
         s = s.str.replace(r'^(nan|none|nat)$', '', case=False, regex=True)
-        
-        # --- AJUSTE CIRÚRGICO FINAL: Correção precisa de encoding ---
-        # Substitui a representação incorreta 'NÃƒO' pela correta 'NÃO'
         s = s.str.replace('NÃƒO', 'NÃO', regex=False)
-        
         df_formatado[col] = s
+
+    if 'valorDivida' in df_formatado.columns:
+        # --- CÓDIGO ANTIGO COMENTADO ---
+        # A linha abaixo falha se 'x' for uma string vazia (''), que é o que acontece
+        # quando o loop anterior converte um NaN para string e depois o apaga.
+        # df_formatado['valorDivida'] = df_formatado['valorDivida'].apply(lambda x: f"{float(x):.2f}" if pd.notna(x) else '')
+
+        # --- CÓDIGO CORRIGIDO ---
+        # 1. Garante que a coluna seja numérica antes de formatar, tratando possíveis erros.
+        df_formatado['valorDivida'] = pd.to_numeric(df_formatado['valorDivida'], errors='coerce')
+        # 2. Aplica a formatação apenas em valores que são de fato numéricos.
+        df_formatado['valorDivida'] = df_formatado['valorDivida'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else '')
+        # 3. Substitui o ponto decimal por vírgula.
+        df_formatado['valorDivida'] = df_formatado['valorDivida'].astype(str).str.replace('.', ',', regex=False)
 
     msg = "Formatação final (remoção de '.0', substituição de 'nan' e correção de 'NÃO') concluída."
     logger.info(msg)
@@ -269,14 +282,15 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
 
     relatorio_final.append(f"1. Registros Iniciais no Mailing: {len(df_processado)}")
     
-    df_processado, msg_duplicatas = _remover_duplicatas(df_processado, 'ncpf')
-    relatorio_final.append(f"2. {msg_duplicatas}")
-    
+    # --- LÓGICA CORRIGIDA ---
     df_processado, msg_pagamentos = _remover_pagamentos(df_processado, dataframes.get('pagamentos', pd.DataFrame()))
-    relatorio_final.append(f"3. {msg_pagamentos}")
-    
+    relatorio_final.append(f"2. {msg_pagamentos}")
+
     df_processado = _calcular_colunas_agregadas(df_processado)
-    relatorio_final.append("4. Cálculo de Colunas Agregadas (Ucs_do_CPF, valorDivida, etc): Concluído.")
+    relatorio_final.append("3. Cálculo de Colunas Agregadas (Ucs_do_CPF, valorDivida, etc): Concluído.")
+
+    df_processado, msg_duplicatas = _remover_duplicatas(df_processado, 'ncpf')
+    relatorio_final.append(f"4. {msg_duplicatas}")
     
     df_processado, msg_enriquecimento = _enriquecer_telefones(df_processado, dataframes)
     relatorio_final.append(f"5. {msg_enriquecimento}")
