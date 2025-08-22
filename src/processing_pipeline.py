@@ -76,6 +76,42 @@ def _remover_pagamentos(df_mailing: pd.DataFrame, df_pagamentos: pd.DataFrame) -
     
     return df_filtrado.drop(columns=['chave_pagamento']), msg
 
+def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
+    # 1. Correção da Lógica de Bloqueio por CPF
+    logger.info("Iniciando remoção de clientes com base no arquivo de tabulações para retirar.")
+    
+    if df_bloqueio is None or df_bloqueio.empty:
+        msg = "Remoção por Tabulação (Arquivo): Arquivo de bloqueio não encontrado ou vazio. Etapa pulada."
+        logger.warning(msg)
+        return df_mailing, msg
+
+    # A chave no arquivo de bloqueio (Tabulações) vem do config.
+    key_bloqueio = config.get('SCHEMA_TABULACOES', 'primary_key', fallback='cpf').lower()
+    # A chave no mailing, neste ponto do script, é 'ncpf'.
+    key_mailing = 'ncpf'
+    
+    if key_mailing not in df_mailing.columns or key_bloqueio not in df_bloqueio.columns:
+        msg = (f"AVISO: Chave para bloqueio não encontrada. "
+               f"'{key_mailing}' não está no mailing ou '{key_bloqueio}' não está no arquivo de bloqueio. Etapa pulada.")
+        logger.warning(msg)
+        return df_mailing, msg
+        
+    tamanho_inicial = len(df_mailing)
+    
+    df_mailing[key_mailing] = df_mailing[key_mailing].astype(str).str.strip()
+    df_bloqueio[key_bloqueio] = df_bloqueio[key_bloqueio].astype(str).str.strip()
+    
+    ids_para_remover = df_bloqueio[key_bloqueio].unique()
+    
+    df_filtrado = df_mailing[~df_mailing[key_mailing].isin(ids_para_remover)]
+    
+    tamanho_final = len(df_filtrado)
+    removidos = tamanho_inicial - tamanho_final
+    msg = f"Remoção por Tabulação (Arquivo): {removidos} registros removidos com base em {len(ids_para_remover)} chaves únicas. Restantes: {tamanho_final}."
+    logger.info(msg)
+    
+    return df_filtrado, msg
+
 def _enriquecer_telefones(df_mailing: pd.DataFrame, dataframes: dict) -> tuple[pd.DataFrame, str]:
     logger.info("Iniciando enriquecimento de telefones.")
     
@@ -208,7 +244,7 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         'telefone_03': 'TELEFONE_03', 'telefone_04': 'TELEFONE_04',
     }
     df_ajustado.rename(columns=mapa_renomeacao, inplace=True)
-    report_msgs.append("Renomeação de colunas (incluindo 'loc' -> 'LOCALIDADE') aplicada.")
+    report_msgs.append("Renomeação de colunas (incluindo 'ncpf' -> 'CPF') aplicada.")
 
     colunas_principais = [
         'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtraso', 'Quantidade_UC_por_CPF',
@@ -229,12 +265,46 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     
     return df_ajustado, report_msgs
 
+def _remover_por_disposicao_final(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
+    logger.info("Iniciando filtro final por disposições/status a serem removidos.")
+    
+    if not config.has_section('FILTROS_FINAIS'):
+        msg = "Filtro Final por Status: Seção [FILTROS_FINAIS] não encontrada no config.ini. Etapa pulada."
+        logger.warning(msg)
+        return df, msg
+
+    coluna_filtro = config.get('FILTROS_FINAIS', 'coluna_filtro_status', fallback='status').lower()
+    disposicoes_str = config.get('FILTROS_FINAIS', 'disposicoes_para_remover', fallback='')
+    
+    if not disposicoes_str:
+        msg = "Filtro Final por Status: Nenhuma disposição para remover foi definida no config.ini. Etapa pulada."
+        logger.warning(msg)
+        return df, msg
+        
+    if coluna_filtro not in df.columns:
+        msg = f"Filtro Final por Status: A coluna '{coluna_filtro}' não foi encontrada no DataFrame. Etapa pulada."
+        logger.error(msg)
+        return df, msg
+
+    tamanho_inicial = len(df)
+    
+    termos_para_remover = [term.strip() for term in disposicoes_str.split('\n') if term.strip()]
+    padrao_regex = '|'.join(re.escape(term) for term in termos_para_remover)
+    
+    df_filtrado = df[~df[coluna_filtro].astype(str).str.contains(padrao_regex, case=False, na=False)]
+    
+    tamanho_final = len(df_filtrado)
+    removidos = tamanho_inicial - tamanho_final
+    msg = f"Filtro Final por Status: {removidos} registros removidos com base nos {len(termos_para_remover)} termos definidos. Restantes: {tamanho_final}."
+    logger.info(msg)
+    
+    return df_filtrado, msg
+
 def _formatar_e_limpar_para_exportacao(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
     logger.info("Iniciando formatação e limpeza final para exportação.")
     df_formatado = df.copy()
     
     for col in df_formatado.columns:
-        # Pula a coluna 'valorDivida' neste loop para tratá-la separadamente depois.
         if col == 'valorDivida':
             continue
         s = df_formatado[col].astype(str)
@@ -244,17 +314,8 @@ def _formatar_e_limpar_para_exportacao(df: pd.DataFrame) -> tuple[pd.DataFrame, 
         df_formatado[col] = s
 
     if 'valorDivida' in df_formatado.columns:
-        # --- CÓDIGO ANTIGO COMENTADO ---
-        # A linha abaixo falha se 'x' for uma string vazia (''), que é o que acontece
-        # quando o loop anterior converte um NaN para string e depois o apaga.
-        # df_formatado['valorDivida'] = df_formatado['valorDivida'].apply(lambda x: f"{float(x):.2f}" if pd.notna(x) else '')
-
-        # --- CÓDIGO CORRIGIDO ---
-        # 1. Garante que a coluna seja numérica antes de formatar, tratando possíveis erros.
         df_formatado['valorDivida'] = pd.to_numeric(df_formatado['valorDivida'], errors='coerce')
-        # 2. Aplica a formatação apenas em valores que são de fato numéricos.
         df_formatado['valorDivida'] = df_formatado['valorDivida'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else '')
-        # 3. Substitui o ponto decimal por vírgula.
         df_formatado['valorDivida'] = df_formatado['valorDivida'].astype(str).str.replace('.', ',', regex=False)
 
     msg = "Formatação final (remoção de '.0', substituição de 'nan' e correção de 'NÃO') concluída."
@@ -271,44 +332,50 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
         return pd.DataFrame()
 
     logger.info("Padronizando nomes de colunas para todos os DataFrames de entrada...")
-    for key, df in dataframes.items():
-        if isinstance(df, pd.DataFrame):
-            dataframes[key] = _standardize_columns(df)
-        elif isinstance(df, dict):
-            for sheet_name, sheet_df in df.items():
-                df[sheet_name] = _standardize_columns(sheet_df)
+    for key, df_or_dict in dataframes.items():
+        if isinstance(df_or_dict, pd.DataFrame):
+            dataframes[key] = _standardize_columns(df_or_dict)
+        elif isinstance(df_or_dict, dict):
+            for sheet_name, sheet_df in df_or_dict.items():
+                if isinstance(sheet_df, pd.DataFrame):
+                    df_or_dict[sheet_name] = _standardize_columns(sheet_df)
     
     df_processado = dataframes['mailing'].copy()
 
     relatorio_final.append(f"1. Registros Iniciais no Mailing: {len(df_processado)}")
     
-    # --- LÓGICA CORRIGIDA ---
+    df_processado, msg_bloqueio = _remover_clientes_por_tabulacao(df_processado, dataframes.get('regras_disposicao'), config)
+    relatorio_final.append(f"2. {msg_bloqueio}")
+    
     df_processado, msg_pagamentos = _remover_pagamentos(df_processado, dataframes.get('pagamentos', pd.DataFrame()))
-    relatorio_final.append(f"2. {msg_pagamentos}")
+    relatorio_final.append(f"3. {msg_pagamentos}")
 
     df_processado = _calcular_colunas_agregadas(df_processado)
-    relatorio_final.append("3. Cálculo de Colunas Agregadas (Ucs_do_CPF, valorDivida, etc): Concluído.")
+    relatorio_final.append("4. Cálculo de Colunas Agregadas (Ucs_do_CPF, valorDivida, etc): Concluído.")
 
     df_processado, msg_duplicatas = _remover_duplicatas(df_processado, 'ncpf')
-    relatorio_final.append(f"4. {msg_duplicatas}")
+    relatorio_final.append(f"5. {msg_duplicatas}")
     
     df_processado, msg_enriquecimento = _enriquecer_telefones(df_processado, dataframes)
-    relatorio_final.append(f"5. {msg_enriquecimento}")
+    relatorio_final.append(f"6. {msg_enriquecimento}")
     
     df_processado, msg_regulariza = _criar_cliente_regulariza_from_mailing(df_processado)
-    relatorio_final.append(f"6. {msg_regulariza}")
+    relatorio_final.append(f"7. {msg_regulariza}")
     
     df_processado['Data_de_Importacao'] = datetime.now().strftime('%d/%m/%Y')
 
+    df_processado, msg_filtro_disp = _remover_por_disposicao_final(df_processado, config)
+    relatorio_final.append(f"8. {msg_filtro_disp}")
+    
     df_final, msgs_ajustes = _aplicar_ajustes_finais(df_processado)
-    relatorio_final.append("7. Ajustes Finais de Layout:")
+    relatorio_final.append("9. Ajustes Finais de Layout:")
     for msg in msgs_ajustes:
         relatorio_final.append(f"   - {msg}")
         
     df_final, msg_formatacao = _formatar_e_limpar_para_exportacao(df_final)
-    relatorio_final.append(f"8. {msg_formatacao}")
+    relatorio_final.append(f"10. {msg_formatacao}")
 
-    relatorio_final.append(f"9. Registros Finais para Exportação: {len(df_final)}")
+    relatorio_final.append(f"11. Registros Finais para Exportação: {len(df_final)}")
     relatorio_final.append("="*75 + "\n")
     
     for linha in relatorio_final:
