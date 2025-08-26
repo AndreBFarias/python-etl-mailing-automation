@@ -76,18 +76,26 @@ def _remover_pagamentos(df_mailing: pd.DataFrame, df_pagamentos: pd.DataFrame) -
     
     return df_filtrado.drop(columns=['chave_pagamento']), msg
 
-def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
-    # 1. Correção da Lógica de Bloqueio por CPF
+#1
+def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input: pd.DataFrame | dict | None, config: ConfigParser) -> tuple[pd.DataFrame, str]:
     logger.info("Iniciando remoção de clientes com base no arquivo de tabulações para retirar.")
     
+    #2
+    df_bloqueio = None
+    if isinstance(df_bloqueio_input, dict):
+        if df_bloqueio_input:
+            first_sheet_name = next(iter(df_bloqueio_input))
+            df_bloqueio = df_bloqueio_input[first_sheet_name]
+            logger.info(f"Múltiplas abas detectadas no arquivo de bloqueio. Usando a primeira aba: '{first_sheet_name}'.")
+    elif isinstance(df_bloqueio_input, pd.DataFrame):
+        df_bloqueio = df_bloqueio_input
+
     if df_bloqueio is None or df_bloqueio.empty:
         msg = "Remoção por Tabulação (Arquivo): Arquivo de bloqueio não encontrado ou vazio. Etapa pulada."
         logger.warning(msg)
         return df_mailing, msg
 
-    # A chave no arquivo de bloqueio (Tabulações) vem do config.
     key_bloqueio = config.get('SCHEMA_TABULACOES', 'primary_key', fallback='cpf').lower()
-    # A chave no mailing, neste ponto do script, é 'ncpf'.
     key_mailing = 'ncpf'
     
     if key_mailing not in df_mailing.columns or key_bloqueio not in df_bloqueio.columns:
@@ -382,4 +390,3 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
         logger.info(linha)
     
     return df_final
-
