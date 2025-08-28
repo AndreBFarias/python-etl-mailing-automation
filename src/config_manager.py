@@ -35,9 +35,11 @@ def validate_config(config: configparser.ConfigParser):
     Raises:
         ValueError: Se uma seção ou chave obrigatória estiver faltando.
     """
+
+
     required_sections = {
         'PATHS': ['input_dir', 'output_dir', 'log_dir', 'state_file'],
-        'FILENAMES': ['mailing_nucleo_pattern', 'pagamentos_pattern', 'disposicoes_pattern', 'enriquecimento_file', 'regras_negociacao_file', 'regras_disposicao_file'],
+        'FILENAMES': ['mailing_nucleo_pattern', 'pagamentos_pattern', 'enriquecimento_file', 'regras_negociacao_file', 'regras_disposicao_file'],
         'SETTINGS': ['log_level', 'output_file_prefix', 'output_date_format']
     }
 
@@ -78,4 +80,3 @@ if __name__ == '__main__':
         print(f"\n--- ERRO NO TESTE ---")
         print(e)
         print("---------------------")
-

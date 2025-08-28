@@ -12,8 +12,8 @@ class SchemaValidationError(ValueError):
 
 def _validate_dataframe_schema(df: pd.DataFrame, required_columns: list[str], file_name: str):
     logger.info(f"Iniciando validação de schema para o arquivo: {file_name}")
-    actual_columns = set(df.columns)
-    required_set = set(required_columns)
+    actual_columns = set(str(col).strip().lower() for col in df.columns)
+    required_set = set(str(col).strip().lower() for col in required_columns)
     missing_columns = required_set - actual_columns
     if missing_columns:
         error_message = (
@@ -48,45 +48,32 @@ def _find_latest_file(directory: Path, pattern: str, optional: bool = False) -> 
     return latest_file
 
 def load_excel_data(path: Path | None, config: ConfigParser, sheet_name_required: str | None = None, required_columns: list[str] | None = None) -> pd.DataFrame | dict[str, pd.DataFrame] | None:
-    # 1. Contrato de Retorno Explícito
     if path is None or not path.exists():
         logger.warning(f"Caminho do arquivo Excel não fornecido ou não existe: {path}. Retornando None.")
         return None
     try:
         logger.info(f"Carregando arquivo Excel: {path.name}")
-        
         all_sheets_data = pd.read_excel(path, sheet_name=None)
-        
         data_to_return = None
         if sheet_name_required:
             if sheet_name_required not in all_sheets_data:
                 raise SchemaValidationError(f"ERRO DE SCHEMA: A aba obrigatória '{sheet_name_required}' não foi encontrada no arquivo '{path.name}'.")
             data_to_return = all_sheets_data[sheet_name_required]
         elif len(all_sheets_data) == 1:
-            # Se houver apenas uma aba, retorna o DataFrame diretamente.
             data_to_return = next(iter(all_sheets_data.values()))
         else:
-            # Se houver múltiplas abas e nenhuma for exigida, retorna o dicionário.
             data_to_return = all_sheets_data
-
         if isinstance(data_to_return, pd.DataFrame):
             data_to_return.columns = [str(col).strip() for col in data_to_return.columns]
-            if 'EMPRESA' in data_to_return.columns:
-                data_to_return['EMPRESA'] = data_to_return['EMPRESA'].astype(str).str.replace('ï»¿', '', regex=False)
             if required_columns:
                 _validate_dataframe_schema(data_to_return, required_columns, path.name)
         elif isinstance(data_to_return, dict):
              for sheet_name, df in data_to_return.items():
                 df.columns = [str(col).strip() for col in df.columns]
                 data_to_return[sheet_name] = df
-        
         return data_to_return
     except (BadZipFile, ValueError) as e:
-        error_message = (
-            f"ERRO DE ARQUIVO CORROMPIDO em '{path.name}'.\n"
-            f"O processo foi interrompido porque o arquivo não pôde ser lido."
-        )
-        raise SchemaValidationError(error_message) from e
+        raise SchemaValidationError(f"ERRO DE ARQUIVO CORROMPIDO em '{path.name}'. O arquivo não pôde ser lido.") from e
     except Exception as e:
         logger.error(f"Erro inesperado ao carregar o arquivo Excel {path.name}: {e}")
         raise
@@ -97,19 +84,46 @@ def load_pagamentos_csv(directory: Path, pattern: str) -> pd.DataFrame:
     if not files:
         logger.warning(f"Nenhum arquivo de pagamento encontrado com o padrão '{pattern}'.")
         return pd.DataFrame()
-
     logger.info(f"Encontrados {len(files)} arquivos de pagamento. Concatenando...")
     all_dfs = []
     for f in files:
         try:
-            df = pd.read_csv(f, sep=',', encoding='utf-8', low_memory=False, header=0)
+            # --- AJUSTE DEFINITIVO DE LEITURA E SCHEMA ---
+            # 1. Separador e Encoding Corrigidos:
+            #    - O diagnóstico revelou que o separador é ',' e não ';'.
+            #    - O encoding 'utf-8-sig' é usado para exorcizar o fantasma 'ï»¿' (BOM) na leitura.
+            #
+            # --- CÓDIGO ANTIGO (Comentado para referência) ---
+            # df = pd.read_csv(f, sep=',', encoding='utf-8-sig', low_memory=False, header=0)
+            df = pd.read_csv(f, sep=',', encoding='utf-8-sig', low_memory=False, header=0)
+
             df.columns = df.columns.str.strip().str.replace('"', '', regex=False)
+            
+            # 2. Padronização e Validação Flexível de Colunas:
+            #    - O mapa de colunas agora é a nossa "pedra de roseta" para traduzir os diferentes
+            #      nomes de colunas para um padrão único que o resto do script entende.
             col_map = {'SIGLA': 'EMPRESA', 'UC': 'UCV', 'ANO': 'ANO', 'MES': 'MES'}
-            if not all(col in df.columns for col in col_map.keys()):
-                logger.error(f"Arquivo de pagamento {f.name} não contém todas as colunas necessárias (SIGLA, UC, ANO, MES) após a limpeza. Pulando este arquivo.")
-                continue
-            df = df[list(col_map.keys())]
+            
+            # --- CÓDIGO ANTIGO DE VALIDAÇÃO (Comentado) ---
+            # if not all(col in df.columns for col in col_map.keys()):
+            #     logger.error(f"Arquivo de pagamento {f.name} não contém todas as colunas necessárias. Pulando.")
+            #     continue
+            # df = df[list(col_map.keys())]
+            # df.rename(columns=col_map, inplace=True)
+
+            # --- NOVA LÓGICA DE MAPEAMENTO E VALIDAÇÃO ---
+            # Renomeia as colunas que existem no arquivo de acordo com nosso mapa.
             df.rename(columns=col_map, inplace=True)
+
+            # Valida se as colunas padronizadas ESSENCIAIS existem APÓS o renomeio.
+            required_cols_after_rename = {'EMPRESA', 'UCV', 'ANO', 'MES'}
+            if not required_cols_after_rename.issubset(df.columns):
+                missing = required_cols_after_rename - set(df.columns)
+                logger.error(f"Arquivo de pagamento {f.name} não contém as colunas essenciais ({missing}) após o mapeamento. Pulando.")
+                continue
+
+            # Seleciona apenas as colunas padronizadas para manter a consistência do fluxo.
+            df = df[list(required_cols_after_rename)]
             all_dfs.append(df)
         except Exception as e:
             logger.error(f"Não foi possível ler ou processar o arquivo de pagamento {f.name}. Erro: {e}")
@@ -117,23 +131,12 @@ def load_pagamentos_csv(directory: Path, pattern: str) -> pd.DataFrame:
     if not all_dfs:
         logger.warning("Nenhum arquivo de pagamento pôde ser processado com sucesso.")
         return pd.DataFrame()
-
+        
     df_final = pd.concat(all_dfs, ignore_index=True)
     logger.info(f"Total de {len(df_final)} registros de pagamento carregados com sucesso.")
     return df_final
 
-def load_txt_data(path: Path | None) -> pd.DataFrame:
-    if path is None or not path.exists():
-        logger.warning(f"Caminho do arquivo TXT não fornecido ou não existe: {path}. Retornando DataFrame vazio.")
-        return pd.DataFrame()
-    try:
-        logger.info(f"Carregando arquivo de texto: {path.name}")
-        return pd.read_csv(path, sep='\t', encoding='latin1', low_memory=False)
-    except Exception as e:
-        logger.error(f"Erro ao carregar o arquivo de texto {path.name}: {e}")
-        return pd.DataFrame()
-
-def load_all_data(config: ConfigParser) -> dict[str, pd.DataFrame]:
+def load_all_data(config: ConfigParser) -> dict[str, pd.DataFrame | dict]:
     paths = config['PATHS']
     filenames = config['FILENAMES']
     input_dir = Path(paths['input_dir'])
@@ -143,11 +146,8 @@ def load_all_data(config: ConfigParser) -> dict[str, pd.DataFrame]:
         mailing_required_cols = [col.strip() for col in mailing_cols_str.split(',') if col.strip()]
         mailing_path = _find_latest_file(input_dir, filenames['mailing_nucleo_pattern'])
         dataframes['mailing'] = load_excel_data(mailing_path, config, required_columns=mailing_required_cols)
-
-        dataframes['pagamentos'] = load_pagamentos_csv(input_dir, filenames['pagamentos_pattern'])
         
-        disposicoes_path = _find_latest_file(input_dir, filenames['disposicoes_pattern'], optional=True)
-        dataframes['disposicoes'] = load_txt_data(disposicoes_path)
+        dataframes['pagamentos'] = load_pagamentos_csv(input_dir, filenames['pagamentos_pattern'])
         
         enriquecimento_path = input_dir / filenames['enriquecimento_file']
         dataframes['enriquecimento'] = load_excel_data(enriquecimento_path, config)
