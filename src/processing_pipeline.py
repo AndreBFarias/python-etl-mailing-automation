@@ -23,8 +23,18 @@ def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
         df.columns = [str(col).strip().lower() for col in df.columns]
     return df
 
-# --- FUNÇÕES DE PROCESSAMENTO ---
+def _tratar_colunas_rebeldes(df: pd.DataFrame) -> pd.DataFrame:
+    logger.info("Iniciando tratamento especial para colunas 'faixa' e 'ndoc'.")
+    if 'faixa' in df.columns:
+        df['faixa'] = df['faixa'].astype(str).str.replace('Ã©', 'é', regex=False)
+        logger.info("Coluna 'faixa' corrigida: caracteres 'Ã©' substituídos por 'é'.")
+    if 'ndoc' in df.columns:
+        numeric_ndoc = pd.to_numeric(df['ndoc'], errors='coerce')
+        df['ndoc'] = numeric_ndoc.apply(lambda x: f'{x:.0f}' if pd.notna(x) else '')
+        logger.info("Coluna 'ndoc' normalizada como texto limpo, sem conversões perigosas.")
+    return df
 
+# --- FUNÇÕES DE PROCESSAMENTO (EXISTENTES) ---
 def _remover_duplicatas(df: pd.DataFrame, chave_primaria: str) -> tuple[pd.DataFrame, str]:
     if chave_primaria not in df.columns:
         msg = f"AVISO: Chave primária '{chave_primaria}' para deduplicação não encontrada. Etapa pulada."
@@ -76,11 +86,9 @@ def _remover_pagamentos(df_mailing: pd.DataFrame, df_pagamentos: pd.DataFrame) -
     
     return df_filtrado.drop(columns=['chave_pagamento']), msg
 
-#1
 def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input: pd.DataFrame | dict | None, config: ConfigParser) -> tuple[pd.DataFrame, str]:
     logger.info("Iniciando remoção de clientes com base no arquivo de tabulações para retirar.")
     
-    #2
     df_bloqueio = None
     if isinstance(df_bloqueio_input, dict):
         if df_bloqueio_input:
@@ -95,8 +103,8 @@ def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input:
         logger.warning(msg)
         return df_mailing, msg
 
-    key_bloqueio = config.get('SCHEMA_TABULACOES', 'primary_key', fallback='cpf').lower()
-    key_mailing = 'ncpf'
+    key_bloqueio = config.get('SCHEMA_TABULACOES', 'primary_key', fallback='idcliente').lower()
+    key_mailing = 'ndoc'
     
     if key_mailing not in df_mailing.columns or key_bloqueio not in df_bloqueio.columns:
         msg = (f"AVISO: Chave para bloqueio não encontrada. "
@@ -115,7 +123,7 @@ def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input:
     
     tamanho_final = len(df_filtrado)
     removidos = tamanho_inicial - tamanho_final
-    msg = f"Remoção por Tabulação (Arquivo): {removidos} registros removidos com base em {len(ids_para_remover)} chaves únicas. Restantes: {tamanho_final}."
+    msg = f"Remoção por Tabulação (Arquivo): {removidos} registros removidos com base em {len(ids_para_remover)} chaves únicas ({key_mailing} <-> {key_bloqueio}). Restantes: {tamanho_final}."
     logger.info(msg)
     
     return df_filtrado, msg
@@ -243,6 +251,12 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     report_msgs = []
     df_ajustado = df.copy()
     
+    # --- AJUSTE FINAL: PURIFICAÇÃO DO PRODUTO ANTES DO RENAME ---
+    if 'empresa' in df_ajustado.columns:
+        # O caractere '\ufeff' é a representação unicode do BOM.
+        df_ajustado['empresa'] = df_ajustado['empresa'].astype(str).str.replace('\ufeff', '', regex=False)
+        logger.info("Coluna 'empresa' purificada antes do rename: resquícios de BOM removidos.")
+    
     mapa_renomeacao = {
         'nomecad': 'NOME_CLIENTE', 'empresa': 'PRODUTO', 'ncpf': 'CPF',
         'totfat': 'parcelasEmAtraso',
@@ -252,7 +266,7 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         'telefone_03': 'TELEFONE_03', 'telefone_04': 'TELEFONE_04',
     }
     df_ajustado.rename(columns=mapa_renomeacao, inplace=True)
-    report_msgs.append("Renomeação de colunas (incluindo 'ncpf' -> 'CPF') aplicada.")
+    report_msgs.append("Renomeação de colunas (incluindo 'empresa' -> 'PRODUTO') aplicada.")
 
     colunas_principais = [
         'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtraso', 'Quantidade_UC_por_CPF',
@@ -349,6 +363,8 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
                     df_or_dict[sheet_name] = _standardize_columns(sheet_df)
     
     df_processado = dataframes['mailing'].copy()
+    
+    df_processado = _tratar_colunas_rebeldes(df_processado)
 
     relatorio_final.append(f"1. Registros Iniciais no Mailing: {len(df_processado)}")
     
@@ -390,3 +406,4 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
         logger.info(linha)
     
     return df_final
+
