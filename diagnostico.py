@@ -1,86 +1,109 @@
 import pandas as pd
 from pathlib import Path
 import glob
+import chardet
 
-# --- CONFIGURAÇÕES ---
-# Ajuste se seus dados de teste estiverem em outro lugar.
+# --- CONFIGURAÇÕES DO RITUAL DE DIAGNÓSTICO ---
+# O diretório onde seus tesouros de dados estão guardados.
 INPUT_DIR = Path("./data_input")
+# Quantas linhas de amostra queremos ver de cada arquivo/aba.
+HEAD_SAMPLE_SIZE = 5
 
-def find_latest_file(directory: Path, pattern: str) -> Path | None:
-    """Função auxiliar para encontrar o arquivo mais recente."""
-    if not directory.exists():
-        return None
-    files = list(directory.glob(pattern))
-    if not files:
-        return None
-    return max(files, key=lambda f: f.stat().st_mtime)
+def divider(title: str, char: str = "="):
+    """Função para imprimir um separador bonito e legível no console."""
+    print("\n" + char * 35)
+    print(f" {title.upper()} ")
+    print(char * 35 + "\n")
 
-def divider(title: str):
-    """Função para imprimir um separador bonito."""
-    print("\n" + "="*25 + f" {title.upper()} " + "="*25 + "\n")
+def analyze_csv(file_path: Path):
+    """
+    Analisa um único arquivo CSV, tentando diferentes encodings e mostrando um head.
+    """
+    print(f"--- INSPECIONANDO ARQUIVO CSV: {file_path.name} ---")
+    
+    # Tentativa de adivinhar o encoding, mas com nossas próprias prioridades.
+    encodings_to_try = ['utf-8-sig', 'utf-8', 'latin-1', 'iso-8859-1']
+    df = None
+    successful_encoding = None
 
+    for enc in encodings_to_try:
+        try:
+            df = pd.read_csv(file_path, sep=';', encoding=enc, low_memory=False, nrows=HEAD_SAMPLE_SIZE * 2)
+            successful_encoding = enc
+            print(f"[SUCESSO] Arquivo lido com o encoding: '{enc}'")
+            break
+        except (UnicodeDecodeError, AttributeError):
+            # AttributeError pode acontecer se o separador estiver errado e o pandas falhar.
+            print(f"[INFO] Falha ao tentar ler com encoding: '{enc}'")
+            continue
+    
+    if df is None:
+        print(f"\n[FALHA] Não foi possível ler o arquivo CSV '{file_path.name}' com os encodings testados.")
+        return
 
-print("--- INICIANDO RITUAL DE DIAGNÓSTICO ---")
+    print("\n[COLUNAS ENCONTRADAS]")
+    print(df.columns.to_list())
+    
+    print(f"\n[AMOSTRA DE DADOS (as primeiras {HEAD_SAMPLE_SIZE} linhas)]")
+    print(df.head(HEAD_SAMPLE_SIZE))
+    print("-" * 70)
 
-# 1. Análise do Arquivo de Mailing
-divider("Analisando MAILING_NUCLEO")
-mailing_pattern = "MAILING_NUCLEO_*.xlsx"
-mailing_path = find_latest_file(INPUT_DIR, mailing_pattern)
-
-if mailing_path:
-    print(f"Arquivo encontrado: {mailing_path.name}\n")
+def analyze_excel(file_path: Path):
+    """
+    Analisa um arquivo Excel, mostrando um head de cada uma de suas abas.
+    """
+    print(f"--- INSPECIONANDO ARQUIVO EXCEL: {file_path.name} ---")
     try:
-        df_mailing = pd.read_excel(mailing_path)
-        print("--- Colunas Encontradas no Mailing ---")
-        print(df_mailing.columns.to_list())
-        print("\n--- Primeiras 5 Linhas do Mailing (head) ---")
-        print(df_mailing.head())
+        xls = pd.ExcelFile(file_path, engine='openpyxl')
+        sheet_names = xls.sheet_names
+        print(f"[INFO] Encontradas {len(sheet_names)} abas: {sheet_names}")
+
+        for i, sheet_name in enumerate(sheet_names):
+            divider(f"Aba #{i+1}: '{sheet_name}'", char="-")
+            try:
+                df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
+                
+                print("[COLUNAS ENCONTRADAS]")
+                print(df_sheet.columns.to_list())
+    
+                print(f"\n[AMOSTRA DE DADOS (as primeiras {HEAD_SAMPLE_SIZE} linhas)]")
+                print(df_sheet.head(HEAD_SAMPLE_SIZE))
+
+            except Exception as e_sheet:
+                print(f"\n[FALHA] Não foi possível ler a aba '{sheet_name}'. Erro: {e_sheet}")
         
-        # Foco nas colunas de telefone do mailing
-        print("\n--- Amostra de Dados das Colunas de Telefone do Mailing ---")
-        for i in range(1, 5):
-            col_name = f'IND_TELEFONE_{i}_VALIDO'
-            if col_name in df_mailing.columns:
-                # Mostra os 5 valores mais comuns e quantos nulos existem
-                print(f"\n- Análise da coluna: '{col_name}'")
-                print(df_mailing[col_name].value_counts(dropna=False).head(5))
-            else:
-                 print(f"\n- Coluna '{col_name}' NÃO ENCONTRADA no mailing.")
+        print("-" * 70)
 
-    except Exception as e:
-        print(f"!!! Erro ao ler o arquivo de mailing: {e}")
-else:
-    print("!!! ARQUIVO DE MAILING NÃO ENCONTRADO.")
+    except Exception as e_file:
+        print(f"\n[FALHA] Não foi possível abrir o arquivo Excel '{file_path.name}'. Erro: {e_file}")
 
+def main():
+    """
+    Função principal que orquestra a análise de todos os arquivos no diretório de entrada.
+    """
+    divider("INÍCIO DO DIAGNÓSTICO COMPLETO DE DADOS")
+    
+    if not INPUT_DIR.exists() or not INPUT_DIR.is_dir():
+        print(f"[ERRO CRÍTICO] O diretório de entrada '{INPUT_DIR}' não foi encontrado.")
+        return
 
-# 2. Análise do Arquivo de Enriquecimento (Pontuação)
-divider("Analisando Pontuação.xlsx")
-pontuacao_path = INPUT_DIR / "Pontuação.xlsx"
+    # Lista todos os arquivos CSV e Excel no diretório
+    files_to_analyze = list(INPUT_DIR.glob('*.csv')) + list(INPUT_DIR.glob('*.xlsx'))
+    
+    if not files_to_analyze:
+        print("[INFO] Nenhum arquivo .csv ou .xlsx encontrado para análise.")
+        return
+        
+    for file_path in sorted(files_to_analyze):
+        if file_path.suffix.lower() == '.csv':
+            analyze_csv(file_path)
+        elif file_path.suffix.lower() == '.xlsx':
+            analyze_excel(file_path)
 
-if pontuacao_path.exists():
-    print(f"Arquivo encontrado: {pontuacao_path.name}\n")
-    try:
-        xls = pd.ExcelFile(pontuacao_path)
-        print("--- Abas (Sheets) Encontradas no Arquivo 'Pontuação.xlsx' ---")
-        print(xls.sheet_names)
+    divider("DIAGNÓSTICO CONCLUÍDO")
 
-        if xls.sheet_names:
-            # Analisa a primeira aba por padrão
-            sheet_to_read = xls.sheet_names[0]
-            print(f"\n--- Analisando a PRIMEIRA aba: '{sheet_to_read}' ---")
-            df_pontuacao = pd.read_excel(pontuacao_path, sheet_name=sheet_to_read)
-            
-            print("\n--- Colunas Encontradas na Aba de Pontuação ---")
-            print(df_pontuacao.columns.to_list())
-            
-            print("\n--- Primeiras 5 Linhas da Aba de Pontuação (head) ---")
-            print(df_pontuacao.head())
-
-    except Exception as e:
-        print(f"!!! Erro ao ler o arquivo de pontuação: {e}")
-else:
-    print("!!! ARQUIVO 'Pontuação.xlsx' NÃO ENCONTRADO.")
-
-divider("FIM DO DIAGNÓSTICO")
-
+if __name__ == "__main__":
+    # Salve este script na pasta raiz do seu projeto (a mesma do main.py)
+    # e execute-o com: python3 diagnostico_completo.py
+    main()
 
