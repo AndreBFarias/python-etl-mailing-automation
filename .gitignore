@@ -1,36 +1,24 @@
-# 1. Ambiente Virtual e Dependências
-# Ignora a pasta do ambiente virtual, que é específica da sua máquina.
+# Ambientes Virtuais
+.venv/
 venv/
-/venv/
+env/
+des/
+.pipelines/
 
-# 2. Arquivos de Cache e Compilados do Python
-# Ignora os arquivos temporários que o Python cria.
+# Cache do Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 
-
-
-
-# Ignora arquivos de estado, relatórios e arquivos de dados
-state.json
-*.xlsx
-*.csv
-*.txt
-*.ipynb
-
-# 4. Arquivos de Configuração de IDE
-# Ignora as configurações específicas do seu VS Code.
+# Arquivos de IDEs e editores
 .vscode/
+.idea/
 
-# 5. Arquivos de Sistema Operacional
-.DS_Store
-Thumbs.db
-
-# 6. Scripts de Validação e Documentos Temporários
-*.sh
-*.md
-# Exceção para o README principal
-!README.md
-
+# Logs e bancos de dados locais
+*.log
+*.db
+*.sqlite3
+build/
+dist/
+*.egg-info/
+log_cat_all_tree-*.txt # Sua linha adicionada e mantida
