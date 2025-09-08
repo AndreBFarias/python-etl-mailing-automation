@@ -2,12 +2,27 @@ import logging
 from src.logger_setup import setup_logger
 from src.config_manager import load_config, validate_config
 from src.state_manager import read_state, write_state
-# 5. Importação da nova exceção e do loader atualizado
 from src.data_loader import load_all_data, SchemaValidationError
-from src.processing_pipeline import processar_dados 
+from src.processing_pipeline import processar_dados
 from src.data_exporter import exportar_dados
+from src.compressor import organize_and_compress_output
+# 1. IMPORTAÇÃO DO NOVO MÓDULO DE VALIDAÇÃO
+from src.schema_validator import get_current_schema, save_snapshot, compare_and_report
 from datetime import datetime
 import sys
+
+# 2. MENSAGEM DE COBRANÇA PRÉ-FORMATADA
+MSG_COBRANCA_ERRO = """
+==================================================
+FALHA NA AUTOMAÇÃO: Mudança na estrutura dos dados de entrada.
+==================================================
+
+A automação foi interrompida porque a estrutura dos arquivos de entrada (nomes de arquivos, abas, colunas ou ordem) foi alterada sem comunicação prévia.
+
+Um laudo técnico detalhado com todas as divergências encontradas foi gerado automaticamente. Por favor, verifiquem o arquivo anexo 'LAUDO_DE_ALTERACOES.txt' e alinhem o processo de extração para garantir a consistência dos dados.
+
+A automação não pode prosseguir até que a estrutura seja corrigida ou as novas regras sejam formalizadas.
+"""
 
 def main():
     """Função principal que orquestra todo o processo de automação."""
@@ -48,14 +63,25 @@ def main():
         write_state(state_file_path, success_state)
         
         logging.info("="*30 + " PROCESSO DE AUTOMAÇÃO CONCLUÍDO COM SUCESSO " + "="*30)
+        
+        organize_and_compress_output()
 
-    # 6. Captura do Erro de Schema
-    except (FileNotFoundError, SchemaValidationError) as e:
-        # A mensagem de erro já vem formatada da exceção, então apenas a logamos.
-        logging.critical(f"\n\n{e}\n")
-        sys.exit(1)
-    except Exception as e:
-        logging.critical(f"ERRO INESPERADO E NÃO TRATADO NO FLUXO PRINCIPAL: {e}", exc_info=True)
+        # 3. CRIAÇÃO/ATUALIZAÇÃO DO SNAPSHOT EM CASO DE SUCESSO
+        logging.info("Atualizando snapshot da estrutura de dados bem-sucedida...")
+        current_schema = get_current_schema()
+        save_snapshot(current_schema)
+
+    except (FileNotFoundError, SchemaValidationError, Exception) as e:
+        # 4. GATILHO DE AUTÓPSIA EM CASO DE QUALQUER ERRO
+        logging.critical(f"ERRO CRÍTICO NO FLUXO PRINCIPAL: {e}", exc_info=True)
+        
+        logging.info("Iniciando diagnóstico automático da estrutura de dados...")
+        laudo = compare_and_report()
+        logging.critical(laudo)
+        
+        # Imprime a mensagem de cobrança para você copiar e colar
+        print(MSG_COBRANCA_ERRO)
+
         if config:
             state_file_path = config.get('PATHS', 'state_file')
             error_state = {
@@ -69,4 +95,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

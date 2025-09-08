@@ -3,12 +3,42 @@ from pathlib import Path
 import logging
 from configparser import ConfigParser
 from zipfile import BadZipFile
+import re
 
 logger = logging.getLogger(__name__)
 
 class SchemaValidationError(ValueError):
     """Erro customizado para falhas na validação do schema do arquivo."""
     pass
+
+def _normalize_filename(name: str) -> str:
+    """Normaliza um nome de arquivo para comparação, removendo espaços, hífens e underscores."""
+    return re.sub(r'[\s_-]', '', name.lower())
+
+def _find_file_by_patterns(directory: Path, patterns: list[str], optional: bool = False) -> Path | None:
+    """
+    Encontra um arquivo em um diretório que corresponde a uma lista de padrões de nomes flexíveis.
+    """
+    normalized_patterns = [_normalize_filename(p) for p in patterns]
+    
+    if not directory.exists():
+        if optional: return None
+        raise FileNotFoundError(f"Diretório CRÍTICO '{directory}' não encontrado.")
+
+    for file_path in directory.iterdir():
+        if file_path.is_file():
+            normalized_file_name = _normalize_filename(file_path.name)
+            for pattern in normalized_patterns:
+                if pattern in normalized_file_name:
+                    logger.info(f"Arquivo encontrado para o padrão '{patterns[0]}': '{file_path.name}'")
+                    return file_path
+    
+    if optional:
+        logger.warning(f"Nenhum arquivo opcional encontrado para os padrões: {patterns}")
+        return None
+    
+    raise FileNotFoundError(f"Nenhum arquivo CRÍTICO encontrado para os padrões '{patterns}' no diretório '{directory}'")
+
 
 def _validate_dataframe_schema(df: pd.DataFrame, required_columns: list[str], file_name: str):
     logger.info(f"Iniciando validação de schema para o arquivo: {file_name}")
@@ -88,41 +118,15 @@ def load_pagamentos_csv(directory: Path, pattern: str) -> pd.DataFrame:
     all_dfs = []
     for f in files:
         try:
-            # --- AJUSTE DEFINITIVO DE LEITURA E SCHEMA ---
-            # 1. Separador e Encoding Corrigidos:
-            #    - O diagnóstico revelou que o separador é ',' e não ';'.
-            #    - O encoding 'utf-8-sig' é usado para exorcizar o fantasma 'ï»¿' (BOM) na leitura.
-            #
-            # --- CÓDIGO ANTIGO (Comentado para referência) ---
-            # df = pd.read_csv(f, sep=',', encoding='utf-8-sig', low_memory=False, header=0)
             df = pd.read_csv(f, sep=',', encoding='utf-8-sig', low_memory=False, header=0)
-
             df.columns = df.columns.str.strip().str.replace('"', '', regex=False)
-            
-            # 2. Padronização e Validação Flexível de Colunas:
-            #    - O mapa de colunas agora é a nossa "pedra de roseta" para traduzir os diferentes
-            #      nomes de colunas para um padrão único que o resto do script entende.
             col_map = {'SIGLA': 'EMPRESA', 'UC': 'UCV', 'ANO': 'ANO', 'MES': 'MES'}
-            
-            # --- CÓDIGO ANTIGO DE VALIDAÇÃO (Comentado) ---
-            # if not all(col in df.columns for col in col_map.keys()):
-            #     logger.error(f"Arquivo de pagamento {f.name} não contém todas as colunas necessárias. Pulando.")
-            #     continue
-            # df = df[list(col_map.keys())]
-            # df.rename(columns=col_map, inplace=True)
-
-            # --- NOVA LÓGICA DE MAPEAMENTO E VALIDAÇÃO ---
-            # Renomeia as colunas que existem no arquivo de acordo com nosso mapa.
             df.rename(columns=col_map, inplace=True)
-
-            # Valida se as colunas padronizadas ESSENCIAIS existem APÓS o renomeio.
             required_cols_after_rename = {'EMPRESA', 'UCV', 'ANO', 'MES'}
             if not required_cols_after_rename.issubset(df.columns):
                 missing = required_cols_after_rename - set(df.columns)
                 logger.error(f"Arquivo de pagamento {f.name} não contém as colunas essenciais ({missing}) após o mapeamento. Pulando.")
                 continue
-
-            # Seleciona apenas as colunas padronizadas para manter a consistência do fluxo.
             df = df[list(required_cols_after_rename)]
             all_dfs.append(df)
         except Exception as e:
@@ -140,6 +144,12 @@ def load_all_data(config: ConfigParser) -> dict[str, pd.DataFrame | dict]:
     paths = config['PATHS']
     filenames = config['FILENAMES']
     input_dir = Path(paths['input_dir'])
+    
+    # Listas de padrões de nomes para busca flexível
+    regras_disposicao_patterns = ["Tabulações para retirar", "Tabulacoes_para_retirar"]
+    enriquecimento_patterns = ["Pontuação", "Pontuacao"]
+    negociacao_patterns = ["Negociações SINED", "Negociacoes_SINED"]
+
     dataframes = {}
     try:
         mailing_cols_str = config.get('SCHEMA_MAILING', 'required_columns', fallback='')
@@ -149,16 +159,17 @@ def load_all_data(config: ConfigParser) -> dict[str, pd.DataFrame | dict]:
         
         dataframes['pagamentos'] = load_pagamentos_csv(input_dir, filenames['pagamentos_pattern'])
         
-        enriquecimento_path = input_dir / filenames['enriquecimento_file']
+        enriquecimento_path = _find_file_by_patterns(input_dir, enriquecimento_patterns, optional=True)
         dataframes['enriquecimento'] = load_excel_data(enriquecimento_path, config)
         
-        negociacao_path = input_dir / filenames['regras_negociacao_file']
+        negociacao_path = _find_file_by_patterns(input_dir, negociacao_patterns, optional=True)
         dataframes['negociacao'] = load_excel_data(negociacao_path, config)
         
         tab_cols_str = config.get('SCHEMA_TABULACOES', 'required_columns', fallback='')
         tab_required_cols = [col.strip() for col in tab_cols_str.split(',') if col.strip()]
         tab_sheet_name = config.get('SCHEMA_TABULACOES', 'required_sheet_name', fallback=None)
-        regras_disp_path = input_dir / filenames['regras_disposicao_file']
+        
+        regras_disp_path = _find_file_by_patterns(input_dir, regras_disposicao_patterns)
         dataframes['regras_disposicao'] = load_excel_data(regras_disp_path, config, sheet_name_required=tab_sheet_name, required_columns=tab_required_cols)
         
         logger.info("Todos os arquivos de dados foram carregados e validados com sucesso.")
@@ -168,4 +179,3 @@ def load_all_data(config: ConfigParser) -> dict[str, pd.DataFrame | dict]:
         logger.critical(f"Ocorreu um erro fatal durante o carregamento dos dados: {e}")
         raise
     return dataframes
-

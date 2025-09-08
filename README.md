@@ -7,10 +7,11 @@
 
 <div style="text-align: center;">
   <h1 style="font-size: 2em;">Pipeline de Automação de Mailing</h1>
-  <img src="logo.png" width="200" alt="Ícone do Pipeline" text-align = "center">
+  <img src="logo.png" width="200" alt="Ícone do Pipeline">
 </div>
 </div>
-Um pipeline de ETL robusto e modular, escrito em Python, que transforma o processo de criação de mailing em uma coreografia de dados. Possui funcionalidades de deduplicação e enriquecimento, garantindo que sua base seja tão pura quanto o primeiro gole de café da manhã. Para otimizar o processamento de grandes volumes, o pipeline agora utiliza a biblioteca `Modin` para paralelização, aproveitando o máximo do hardware disponível.
+
+Um pipeline de ETL robusto, modular e resiliente, escrito em Python, que transforma o processo de criação de mailing em uma coreografia de dados. O sistema foi blindado com mecanismos de autodiagnóstico e flexibilidade para resistir a inconsistências nos dados de entrada, garantindo a integridade do processo.
 
 ---
 
@@ -18,27 +19,27 @@ Um pipeline de ETL robusto e modular, escrito em Python, que transforma o proces
 
 O projeto é uma orquestra de dados, dividida em módulos que trabalham em harmonia:
 
-- **Configuração Externa**: Um arquivo `config.ini` centraliza os parâmetros, permitindo que a operação seja ajustada sem tocar no código, como um maestro que rege sem alterar a partitura.
-- **Motor de Ingestão**: O `data_loader.py` é o coração que pulsa, capaz de carregar diversos formatos de arquivos (.xlsx, .csv, .txt), com uma resiliência que o torna imune a erros.
-- **Core de Processamento**: O `processing_pipeline.py` implementa a lógica do negócio, com a inteligência de deduplicação e enriquecimento de dados. A performance para grandes datasets foi aprimorada com a inclusão de paralelismo através da biblioteca `Modin`.
-- **Módulo de Exportação**: O `data_exporter.py` é o finalizador, que exporta os arquivos `.csv` no layout exato e particionados por produto, prontos para a importação.
-- **Resiliência e Auditoria**: O fluxo de trabalho é registrado em detalhes para auditoria e, em caso de falha, um `state.json` permite que a execução seja retomada, pois um bom espetáculo nunca deve ser interrompido.
+-   **Configuração Externa**: Um arquivo `config.ini` centraliza os parâmetros, permitindo que a operação seja ajustada sem tocar no código.
+-   **Motor de Ingestão Flexível**: O `data_loader.py` é o coração que pulsa, capaz de carregar diversos formatos de arquivos e inteligente o suficiente para encontrar os arquivos de regras (`.xlsx`, `.csv`) mesmo que seus nomes sejam alterados (ex: "Tabulacoes.xlsx" vs "tabulacoes_para_retirar.xlsx").
+-   **Core de Processamento Multicamadas**: O `processing_pipeline.py` implementa a lógica de negócio com **quatro camadas de higienização**:
+    1.  Remoção por Chave Externa (CPF vs. IdCliente).
+    2.  Remoção por Status da Tabulação (Ex: "CLIENTE FALECIDO").
+    3.  Remoção de Duplicatas por CPF.
+    4.  Remoção por Status do Mailing (Coluna `bloq`).
+-   **Módulo de Exportação e Organização**: O `data_exporter.py` exporta os arquivos `.csv` particionados por produto.
+-   **Módulo de Compressão e Arquivamento**: Ao final de uma execução bem-sucedida, o `compressor.py` entra em ação, organizando todos os arquivos de saída do dia em uma pasta datada, copiando o log da execução e compactando tudo em um arquivo `.zip` para distribuição e arquivamento.
+-   **Validador de Schema e Autópsia Automática**: O `schema_validator.py` é o guardião da estabilidade.
+    -   **Em sucesso:** Ele cria um "snapshot" da estrutura de dados bem-sucedida (`schema_snapshot.json`).
+    -   **Em falha:** Ele é acionado automaticamente, compara a estrutura atual com o último snapshot e gera um laudo técnico (`LAUDO_DE_ALTERACOES.txt`), detalhando todas as mudanças não comunicadas (colunas, abas, ordem, etc.), expondo a causa raiz do erro.
 
 ## Pré-requisitos
 
-- Python 3.8 ou superior.
+-   Python 3.8 ou superior.
 
 ## Instalação e Uso
 
-### Versão para Execução Local (Modular)
-
-Para esta versão, que é ideal para ambientes controlados e testes locais:
-
 1.  **Clone o repositório:**
     ```bash
-    git clone [https://github.com/AndreBFarias/Energisa-Automacao-Mailing.git](https://github.com/AndreBFarias/Energisa-Automacao-Mailing.git)
-    cd Energisa-Automacao-Mailing
-
     git clone [https://github.com/AndreBFarias/python-etl-mailing-automation.git](https://github.com/AndreBFarias/python-etl-mailing-automation.git)
     cd python-etl-mailing-automation
     ```
@@ -49,30 +50,10 @@ Para esta versão, que é ideal para ambientes controlados e testes locais:
     pip install -r requirements.txt
     ```
 3.  **Configuração e Execução:**
-    - Ajuste o arquivo `config.ini` com os caminhos e parâmetros desejados.
-    - Coloque os arquivos de entrada na pasta `./data_input`.
-    - Execute o script principal: `python main.py`
-
-### Versão Notebook
-
-Para esta versão, que é ideal para execução em nuvem, especialmente com grandes volumes de dados, uma versão unificada em Notebook (`Mailing_Automação.ipynb`) foi criada.
-
-1.  **Acesse o Colab:** Abra o Google Colab e crie um novo notebook, ou carregue o arquivo `Mailing_Automação.ipynb` do seu repositório.
-2.  **Organize os Arquivos:** Crie a pasta `mailing-energisa` no seu Google Drive. Dentro dela, crie as subpastas `data_input`, `data_output` e `logs`, conforme a configuração no script. Coloque todos os arquivos de entrada (`.xlsx`, `.csv`, `.txt`) na pasta `data_input` do Drive.
-2.  **Organize os Arquivos:** Crie a pasta `mailing` no seu Google Drive. Dentro dela, crie as subpastas `data_input`, `data_output` e `logs`, conforme a configuração no script. Coloque todos os arquivos de entrada (`.xlsx`, `.csv`, `.txt`) na pasta `data_input` do Drive.
-3.  **Execute o Notebook:** O script do Notebook foi projetado para ser executado célula por célula, seguindo a ordem. A primeira célula irá instalar as dependências e a segunda irá montar seu Google Drive, permitindo que o script acesse os arquivos diretamente.
-4.  **Atenção à Performance:** A versão do Notebook utiliza `Modin` para paralelismo, garantindo uma performance otimizada para o processamento de grandes arquivos.
-
-### Dependências
-
-As ferramentas que fazem este espetáculo acontecer são:
-
-- `pandas` para manipular os dados com graça e precisão.
-- `modin` para paralelizar as operações do pandas e acelerar o processamento de grandes datasets.
-- `openpyxl` para ler as nuances dos arquivos `.xlsx`.
-- `configparser` para gerir as configurações de forma externa.
+    -   Ajuste o arquivo `config.ini` com os caminhos e parâmetros desejados.
+    -   Coloque os arquivos de entrada na pasta `./data_input`.
+    -   Execute o script principal: `python main.py`
 
 ### Licença GPL v3
 
-> Livre para modificar e usar da forma que preferir desde que tudo permaneça livre.
-
+> Livre para modificar e usar da forma que preferir, desde que tudo permaneça livre.

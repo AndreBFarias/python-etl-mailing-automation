@@ -2,10 +2,8 @@
 .venv/
 venv/
 env/
-des/
-.pipelines/
 
-# Cache do Python
+# Cache do Python e arquivos compilados
 __pycache__/
 *.py[cod]
 *$py.class
@@ -14,11 +12,26 @@ __pycache__/
 .vscode/
 .idea/
 
-# Logs e bancos de dados locais
-*.log
-*.db
-*.sqlite3
+# Arquivos de build e distribuição
 build/
 dist/
 *.egg-info/
-log_cat_all_tree-*.txt # Sua linha adicionada e mantida
+
+
+data_input/
+data_output/
+
+
+logs/
+
+# Ignora arquivos de estado, snapshots e laudos gerados pela automação
+state.json
+schema_snapshot.json
+LAUDO_DE_ALTERACOES.txt
+*.log
+
+# Ignora arquivos de teste ou temporários
+*.json
+*.csv
+*.zip
+*.xlsx

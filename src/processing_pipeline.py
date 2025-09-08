@@ -34,7 +34,8 @@ def _tratar_colunas_rebeldes(df: pd.DataFrame) -> pd.DataFrame:
         logger.info("Coluna 'ndoc' normalizada como texto limpo, sem conversões perigosas.")
     return df
 
-# --- FUNÇÕES DE PROCESSAMENTO (EXISTENTES) ---
+# --- FUNÇÕES DE PROCESSAMENTO ---
+
 def _remover_duplicatas(df: pd.DataFrame, chave_primaria: str) -> tuple[pd.DataFrame, str]:
     if chave_primaria not in df.columns:
         msg = f"AVISO: Chave primária '{chave_primaria}' para deduplicação não encontrada. Etapa pulada."
@@ -104,7 +105,7 @@ def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input:
         return df_mailing, msg
 
     key_bloqueio = config.get('SCHEMA_TABULACOES', 'primary_key', fallback='idcliente').lower()
-    key_mailing = 'ndoc'
+    key_mailing = config.get('SCHEMA_MAILING', 'mailing_key_for_removals', fallback='ndoc').lower()
     
     if key_mailing not in df_mailing.columns or key_bloqueio not in df_bloqueio.columns:
         msg = (f"AVISO: Chave para bloqueio não encontrada. "
@@ -127,6 +128,66 @@ def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input:
     logger.info(msg)
     
     return df_filtrado, msg
+
+def _remover_por_status_da_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input: pd.DataFrame | dict | None, config: ConfigParser) -> tuple[pd.DataFrame, str]:
+    """
+    QUARTA CAMADA DE DEFESA: Remove clientes com base em status específicos
+    definidos no config.ini e encontrados no arquivo de tabulações.
+    """
+    logger.info("Iniciando remoção por status do arquivo de tabulação (Camada 4).")
+
+    df_bloqueio = None
+    if isinstance(df_bloqueio_input, dict):
+        if df_bloqueio_input:
+            first_sheet_name = next(iter(df_bloqueio_input))
+            df_bloqueio = df_bloqueio_input[first_sheet_name]
+    elif isinstance(df_bloqueio_input, pd.DataFrame):
+        df_bloqueio = df_bloqueio_input
+
+    if df_bloqueio is None or df_bloqueio.empty:
+        msg = "Remoção por Status da Tabulação: Arquivo de bloqueio não encontrado ou vazio. Etapa pulada."
+        logger.warning(msg)
+        return df_mailing, msg
+
+    key_col_bloqueio = config.get('SCHEMA_TABULACOES', 'primary_key', fallback='idcliente').lower()
+    status_col = config.get('SCHEMA_TABULACOES', 'coluna_status', fallback='status').lower()
+    status_para_remover_str = config.get('SCHEMA_TABULACOES', 'status_para_remover', fallback='')
+    key_col_mailing = config.get('SCHEMA_MAILING', 'mailing_key_for_removals', fallback='ncpf').lower()
+
+    if not status_para_remover_str:
+        msg = "Remoção por Status da Tabulação: Nenhuma lista de status para remover foi definida no config.ini. Etapa pulada."
+        logger.warning(msg)
+        return df_mailing, msg
+
+    if not all(c in df_bloqueio.columns for c in [key_col_bloqueio, status_col]):
+        msg = f"AVISO: Colunas necessárias ('{key_col_bloqueio}', '{status_col}') não encontradas no arquivo de tabulação. Etapa pulada."
+        logger.warning(msg)
+        return df_mailing, msg
+    if key_col_mailing not in df_mailing.columns:
+        msg = f"AVISO: Coluna chave '{key_col_mailing}' não encontrada no mailing. Etapa pulada."
+        logger.warning(msg)
+        return df_mailing, msg
+
+    tamanho_inicial = len(df_mailing)
+    
+    status_para_remover = [s.strip().lower() for s in status_para_remover_str.split('\n') if s.strip()]
+    
+    df_filtrado_bloqueio = df_bloqueio[df_bloqueio[status_col].str.strip().str.lower().isin(status_para_remover)]
+    
+    if df_filtrado_bloqueio.empty:
+        msg = "Remoção por Status da Tabulação: Nenhum cliente encontrado com os status de remoção especificados."
+        logger.info(msg)
+        return df_mailing, msg
+
+    ids_para_remover = set(df_filtrado_bloqueio[key_col_bloqueio].astype(str).str.strip())
+    
+    df_final = df_mailing[~df_mailing[key_col_mailing].astype(str).str.strip().isin(ids_para_remover)]
+    
+    removidos = tamanho_inicial - len(df_final)
+    msg = f"Remoção por Status da Tabulação: {removidos} registros removidos com base em {len(status_para_remover)} status. Restantes: {len(df_final)}."
+    logger.info(msg)
+    
+    return df_final, msg
 
 def _enriquecer_telefones(df_mailing: pd.DataFrame, dataframes: dict) -> tuple[pd.DataFrame, str]:
     logger.info("Iniciando enriquecimento de telefones.")
@@ -251,9 +312,7 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     report_msgs = []
     df_ajustado = df.copy()
     
-    # --- AJUSTE FINAL: PURIFICAÇÃO DO PRODUTO ANTES DO RENAME ---
     if 'empresa' in df_ajustado.columns:
-        # O caractere '\ufeff' é a representação unicode do BOM.
         df_ajustado['empresa'] = df_ajustado['empresa'].astype(str).str.replace('\ufeff', '', regex=False)
         logger.info("Coluna 'empresa' purificada antes do rename: resquícios de BOM removidos.")
     
@@ -371,39 +430,41 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
     df_processado, msg_bloqueio = _remover_clientes_por_tabulacao(df_processado, dataframes.get('regras_disposicao'), config)
     relatorio_final.append(f"2. {msg_bloqueio}")
     
+    df_processado, msg_status_tab = _remover_por_status_da_tabulacao(df_processado, dataframes.get('regras_disposicao'), config)
+    relatorio_final.append(f"3. {msg_status_tab}")
+    
     df_processado, msg_pagamentos = _remover_pagamentos(df_processado, dataframes.get('pagamentos', pd.DataFrame()))
-    relatorio_final.append(f"3. {msg_pagamentos}")
+    relatorio_final.append(f"4. {msg_pagamentos}")
 
     df_processado = _calcular_colunas_agregadas(df_processado)
-    relatorio_final.append("4. Cálculo de Colunas Agregadas (Ucs_do_CPF, valorDivida, etc): Concluído.")
+    relatorio_final.append("5. Cálculo de Colunas Agregadas (Ucs_do_CPF, valorDivida, etc): Concluído.")
 
     df_processado, msg_duplicatas = _remover_duplicatas(df_processado, 'ncpf')
-    relatorio_final.append(f"5. {msg_duplicatas}")
+    relatorio_final.append(f"6. {msg_duplicatas}")
     
     df_processado, msg_enriquecimento = _enriquecer_telefones(df_processado, dataframes)
-    relatorio_final.append(f"6. {msg_enriquecimento}")
+    relatorio_final.append(f"7. {msg_enriquecimento}")
     
     df_processado, msg_regulariza = _criar_cliente_regulariza_from_mailing(df_processado)
-    relatorio_final.append(f"7. {msg_regulariza}")
+    relatorio_final.append(f"8. {msg_regulariza}")
     
     df_processado['Data_de_Importacao'] = datetime.now().strftime('%d/%m/%Y')
 
     df_processado, msg_filtro_disp = _remover_por_disposicao_final(df_processado, config)
-    relatorio_final.append(f"8. {msg_filtro_disp}")
+    relatorio_final.append(f"9. {msg_filtro_disp}")
     
     df_final, msgs_ajustes = _aplicar_ajustes_finais(df_processado)
-    relatorio_final.append("9. Ajustes Finais de Layout:")
+    relatorio_final.append("10. Ajustes Finais de Layout:")
     for msg in msgs_ajustes:
         relatorio_final.append(f"   - {msg}")
         
     df_final, msg_formatacao = _formatar_e_limpar_para_exportacao(df_final)
-    relatorio_final.append(f"10. {msg_formatacao}")
+    relatorio_final.append(f"11. {msg_formatacao}")
 
-    relatorio_final.append(f"11. Registros Finais para Exportação: {len(df_final)}")
+    relatorio_final.append(f"12. Registros Finais para Exportação: {len(df_final)}")
     relatorio_final.append("="*75 + "\n")
     
     for linha in relatorio_final:
         logger.info(linha)
     
     return df_final
-
