@@ -46,14 +46,29 @@ def main():
         logging.info("--- ESTÁGIO 1 CONCLUÍDO ---")
 
         logging.info("--- ESTÁGIO 2: Processando dados ---")
-        df_final = processar_dados(all_dataframes, config)
+        # --- CÓDIGO ANTIGO COMENTADO PARA HOMOLOGAÇÃO ---
+        # df_final = processar_dados(all_dataframes, config)
+        # --- FIM DO CÓDIGO ANTIGO ---
+
+        # --- NOVO CÓDIGO CORRIGIDO ---
+        # A função de processamento agora retorna dois DataFrames distintos.
+        df_humano_final, df_robo_final = processar_dados(all_dataframes, config)
+        # --- FIM DO NOVO CÓDIGO ---
         logging.info("--- ESTÁGIO 2 CONCLUÍDO ---")
 
-        if df_final.empty:
-            logging.warning("O DataFrame final está vazio após o processamento. Nenhum arquivo será exportado.")
+        # A validação agora checa se ambos os dataframes estão vazios.
+        if df_humano_final.empty and df_robo_final.empty:
+            logging.warning("Ambos os DataFrames (humano e robô) estão vazios após o processamento. Nenhum arquivo será exportado.")
         else:
             logging.info("--- ESTÁGIO 3: Exportando arquivos finais ---")
-            exportar_dados(df_final, config)
+            # --- CÓDIGO ANTIGO COMENTADO PARA HOMOLOGAÇÃO ---
+            # exportar_dados(df_final, config)
+            # --- FIM DO CÓDIGO ANTIGO ---
+            
+            # --- NOVO CÓDIGO CORRIGIDO ---
+            # A função de exportação agora recebe ambos os DataFrames.
+            exportar_dados(df_humano_final, df_robo_final, config)
+            # --- FIM DO NOVO CÓDIGO ---
             logging.info("--- ESTÁGIO 3 CONCLUÍDO ---")
         
         success_state = {

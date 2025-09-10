@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+# Versão: 2.0 - Corrigida em 09/09/2025
+# Autor: Gemini, sob a direção de André Farias
+# Notas da Versão:
+# - Corrigida a inconsistência de nomenclatura da coluna de dívida ('valordivida' vs 'valorDivida').
+# - Implementada a nova hierarquia de ordenação: 1º Valor Dívida, 2º Situação, 3º Faixa.
+# - Blindada a função de formatação numérica para garantir o formato 'xxxx,xx' independentemente da localidade.
+# - Adicionada coerção de tipo explícita para robustez nos filtros de valor.
+
 import pandas as pd
 import numpy as np
 import logging
@@ -130,10 +139,6 @@ def _remover_clientes_por_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input:
     return df_filtrado, msg
 
 def _remover_por_status_da_tabulacao(df_mailing: pd.DataFrame, df_bloqueio_input: pd.DataFrame | dict | None, config: ConfigParser) -> tuple[pd.DataFrame, str]:
-    """
-    QUARTA CAMADA DE DEFESA: Remove clientes com base em status específicos
-    definidos no config.ini e encontrados no arquivo de tabulações.
-    """
     logger.info("Iniciando remoção por status do arquivo de tabulação (Camada 4).")
 
     df_bloqueio = None
@@ -260,14 +265,14 @@ def _enriquecer_telefones(df_mailing: pd.DataFrame, dataframes: dict) -> tuple[p
     return df_final, msg
 
 def _calcular_colunas_agregadas(df: pd.DataFrame) -> pd.DataFrame:
-    logger.info("Calculando colunas agregadas (valorDivida, Quantidade_UC_por_CPF, Ucs_do_CPF).")
+    logger.info("Calculando colunas agregadas (valordivida, Quantidade_UC_por_CPF, Ucs_do_CPF).")
     
     if 'ncpf' in df.columns and 'liquido' in df.columns:
-        df['liquido'] = pd.to_numeric(df['liquido'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
-        df['valorDivida'] = df.groupby('ncpf')['liquido'].transform('sum')
+        df['liquido'] = pd.to_numeric(df['liquido'], errors='coerce').fillna(0)
+        df['valordivida'] = df.groupby('ncpf')['liquido'].transform('sum')
     else:
-        logger.error("Colunas 'ncpf' ou 'liquido' não encontradas. Não é possível calcular 'valorDivida'.")
-        df['valorDivida'] = 0
+        logger.error("Colunas 'ncpf' ou 'liquido' não encontradas. Não é possível calcular 'valordivida'.")
+        df['valordivida'] = 0
 
     if 'ncpf' in df.columns and 'ucv' in df.columns:
         df['ucv'] = df['ucv'].astype(str)
@@ -323,9 +328,10 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         'quantidades_de_acionamentos': 'Quantidades_de_Acionamentos',
         'telefone_01': 'TELEFONE_01', 'telefone_02': 'TELEFONE_02',
         'telefone_03': 'TELEFONE_03', 'telefone_04': 'TELEFONE_04',
+        'valordivida': 'valorDivida'
     }
     df_ajustado.rename(columns=mapa_renomeacao, inplace=True)
-    report_msgs.append("Renomeação de colunas (incluindo 'empresa' -> 'PRODUTO') aplicada.")
+    report_msgs.append("Renomeação de colunas (incluindo 'valordivida' -> 'valorDivida') aplicada.")
 
     colunas_principais = [
         'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtraso', 'Quantidade_UC_por_CPF',
@@ -346,37 +352,28 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     
     return df_ajustado, report_msgs
 
-def _remover_por_disposicao_final(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
-    logger.info("Iniciando filtro final por disposições/status a serem removidos.")
-    
+def _manter_apenas_nao_bloqueados(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
+    logger.info("Iniciando filtro de registros bloqueados (mantendo apenas 'N').")
+
     if not config.has_section('FILTROS_FINAIS'):
-        msg = "Filtro Final por Status: Seção [FILTROS_FINAIS] não encontrada no config.ini. Etapa pulada."
+        msg = "Filtro de Bloqueio: Seção [FILTROS_FINAIS] não encontrada no config.ini. Etapa pulada."
         logger.warning(msg)
         return df, msg
 
-    coluna_filtro = config.get('FILTROS_FINAIS', 'coluna_filtro_status', fallback='status').lower()
-    disposicoes_str = config.get('FILTROS_FINAIS', 'disposicoes_para_remover', fallback='')
-    
-    if not disposicoes_str:
-        msg = "Filtro Final por Status: Nenhuma disposição para remover foi definida no config.ini. Etapa pulada."
-        logger.warning(msg)
-        return df, msg
-        
+    coluna_filtro = config.get('FILTROS_FINAIS', 'coluna_filtro_status', fallback='bloq').lower()
+
     if coluna_filtro not in df.columns:
-        msg = f"Filtro Final por Status: A coluna '{coluna_filtro}' não foi encontrada no DataFrame. Etapa pulada."
+        msg = f"Filtro de Bloqueio: A coluna '{coluna_filtro}' não foi encontrada no DataFrame. Etapa pulada."
         logger.error(msg)
         return df, msg
 
     tamanho_inicial = len(df)
     
-    termos_para_remover = [term.strip() for term in disposicoes_str.split('\n') if term.strip()]
-    padrao_regex = '|'.join(re.escape(term) for term in termos_para_remover)
-    
-    df_filtrado = df[~df[coluna_filtro].astype(str).str.contains(padrao_regex, case=False, na=False)]
+    df_filtrado = df[df[coluna_filtro].astype(str).str.strip().str.upper() == 'N']
     
     tamanho_final = len(df_filtrado)
     removidos = tamanho_inicial - tamanho_final
-    msg = f"Filtro Final por Status: {removidos} registros removidos com base nos {len(termos_para_remover)} termos definidos. Restantes: {tamanho_final}."
+    msg = f"Filtro de Bloqueio ('{coluna_filtro}'): {removidos} registros removidos. Restantes: {tamanho_final}."
     logger.info(msg)
     
     return df_filtrado, msg
@@ -385,8 +382,10 @@ def _formatar_e_limpar_para_exportacao(df: pd.DataFrame) -> tuple[pd.DataFrame, 
     logger.info("Iniciando formatação e limpeza final para exportação.")
     df_formatado = df.copy()
     
+    coluna_divida_final = 'valorDivida'
+    
     for col in df_formatado.columns:
-        if col == 'valorDivida':
+        if col == coluna_divida_final:
             continue
         s = df_formatado[col].astype(str)
         s = s.str.replace(r'\.0$', '', regex=True)
@@ -394,23 +393,96 @@ def _formatar_e_limpar_para_exportacao(df: pd.DataFrame) -> tuple[pd.DataFrame, 
         s = s.str.replace('NÃƒO', 'NÃO', regex=False)
         df_formatado[col] = s
 
-    if 'valorDivida' in df_formatado.columns:
-        df_formatado['valorDivida'] = pd.to_numeric(df_formatado['valorDivida'], errors='coerce')
-        df_formatado['valorDivida'] = df_formatado['valorDivida'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else '')
-        df_formatado['valorDivida'] = df_formatado['valorDivida'].astype(str).str.replace('.', ',', regex=False)
+    if coluna_divida_final in df_formatado.columns:
+        valor_numerico = pd.to_numeric(df_formatado[coluna_divida_final], errors='coerce')
+        df_formatado[coluna_divida_final] = valor_numerico.apply(
+            lambda x: f'{x:.2f}'.replace('.', ',') if pd.notna(x) else ''
+        )
 
     msg = "Formatação final (remoção de '.0', substituição de 'nan' e correção de 'NÃO') concluída."
     logger.info(msg)
     return df_formatado, msg
 
+def _aplicar_filtros_valor_minimo(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+    logger.info("Aplicando filtros de valor mínimo para mailing humano.")
+    
+    if not config.has_section('FILTROS_VALOR_MINIMO_HUMANO'):
+        msg = "AVISO: Seção [FILTROS_VALOR_MINIMO_HUMANO] não encontrada no config.ini. Nenhum filtro de valor aplicado."
+        logger.warning(msg)
+        return df, pd.DataFrame(), msg
+
+    col_divida = config.get('FILTROS_VALOR_MINIMO_HUMANO', 'coluna_divida_filtro', fallback='valordivida').lower()
+    empresas_especiais_str = config.get('FILTROS_VALOR_MINIMO_HUMANO', 'empresas_corte_especial', fallback='')
+    corte_especial = config.getfloat('FILTROS_VALOR_MINIMO_HUMANO', 'valor_corte_especial', fallback=500.0)
+    corte_geral = config.getfloat('FILTROS_VALOR_MINIMO_HUMANO', 'valor_corte_geral', fallback=200.0)
+    
+    empresas_especiais = [e.strip().upper() for e in empresas_especiais_str.split(',')]
+
+    if col_divida not in df.columns:
+        msg = f"ERRO: Coluna de dívida '{col_divida}' não encontrada. Filtro de valor mínimo abortado."
+        logger.error(msg)
+        return df, pd.DataFrame(), msg
+
+    df[col_divida] = pd.to_numeric(df[col_divida], errors='coerce')
+
+    tamanho_inicial = len(df)
+    
+    cond_especial = (df['empresa'].str.upper().isin(empresas_especiais)) & (df[col_divida] >= corte_especial)
+    cond_geral = (~df['empresa'].str.upper().isin(empresas_especiais)) & (df[col_divida] >= corte_geral)
+    
+    df_humano = df[cond_especial | cond_geral].copy()
+    df_robo = df[~(cond_especial | cond_geral)].copy()
+    
+    removidos = len(df_robo)
+    msg = f"Filtro de Valor Mínimo: {len(df_humano)} registros mantidos para mailing humano. {removidos} registros movidos para o robô."
+    logger.info(msg)
+    
+    return df_humano, df_robo, msg
+
+def _aplicar_ordenacao_humano(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
+    logger.info("Aplicando ordenação estratégica no mailing humano.")
+
+    if not config.has_section('ORDENACAO_HUMANO'):
+        msg = "AVISO: Seção [ORDENACAO_HUMANO] não encontrada no config.ini. Etapa de ordenação pulada."
+        logger.warning(msg)
+        return df, msg
+
+    col_sit = config.get('ORDENACAO_HUMANO', 'coluna_situacao', fallback='sit').lower()
+    ordem_sit_str = config.get('ORDENACAO_HUMANO', 'ordem_situacao', fallback='LIGADO,DESLIGADO,INATIVO')
+    col_divida = config.get('ORDENACAO_HUMANO', 'coluna_divida_ordem', fallback='valordivida').lower()
+    col_faixa = config.get('ORDENACAO_HUMANO', 'coluna_faixa', fallback='faixa').lower()
+    faixa_prioritaria = config.get('ORDENACAO_HUMANO', 'valor_prioritario_faixa', fallback='A VENCER').upper()
+
+    if not all(c in df.columns for c in [col_sit, col_divida, col_faixa]):
+        msg = f"ERRO: Uma ou mais colunas de ordenação ({col_sit}, {col_divida}, {col_faixa}) não encontradas. Etapa abortada."
+        logger.error(msg)
+        return df, msg
+
+    df['ordem_faixa'] = np.where(df[col_faixa].str.upper() == faixa_prioritaria, 0, 1)
+
+    ordem_sit = [s.strip().upper() for s in ordem_sit_str.split(',')]
+    df[col_sit] = df[col_sit].astype(str).str.upper()
+    df['ordem_sit'] = pd.Categorical(df[col_sit], categories=ordem_sit, ordered=True)
+    
+    df_ordenado = df.sort_values(
+        by=[col_divida, 'ordem_sit', 'ordem_faixa'],
+        ascending=[False, True, True]
+    )
+    
+    df_ordenado = df_ordenado.drop(columns=['ordem_faixa', 'ordem_sit'])
+    
+    msg = "Ordenação estratégica (Valor da Dívida > Situação > Faixa) aplicada com sucesso."
+    logger.info(msg)
+    return df_ordenado, msg
+
 # --- FUNÇÃO ORQUESTRADORA DO PIPELINE ---
 
-def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -> pd.DataFrame:
+def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -> tuple[pd.DataFrame, pd.DataFrame]:
     relatorio_final = ["\n" + "="*25 + " RELATÓRIO FINAL DA ALQUIMIA " + "="*25]
     
     if 'mailing' not in dataframes or dataframes['mailing'].empty:
         logger.critical("DataFrame de 'mailing' não encontrado ou vazio. Abortando.")
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
     logger.info("Padronizando nomes de colunas para todos os DataFrames de entrada...")
     for key, df_or_dict in dataframes.items():
@@ -437,7 +509,7 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
     relatorio_final.append(f"4. {msg_pagamentos}")
 
     df_processado = _calcular_colunas_agregadas(df_processado)
-    relatorio_final.append("5. Cálculo de Colunas Agregadas (Ucs_do_CPF, valorDivida, etc): Concluído.")
+    relatorio_final.append("5. Cálculo de Colunas Agregadas (Ucs_do_CPF, valordivida, etc): Concluído.")
 
     df_processado, msg_duplicatas = _remover_duplicatas(df_processado, 'ncpf')
     relatorio_final.append(f"6. {msg_duplicatas}")
@@ -450,21 +522,30 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
     
     df_processado['Data_de_Importacao'] = datetime.now().strftime('%d/%m/%Y')
 
-    df_processado, msg_filtro_disp = _remover_por_disposicao_final(df_processado, config)
+    df_processado, msg_filtro_disp = _manter_apenas_nao_bloqueados(df_processado, config)
     relatorio_final.append(f"9. {msg_filtro_disp}")
     
-    df_final, msgs_ajustes = _aplicar_ajustes_finais(df_processado)
-    relatorio_final.append("10. Ajustes Finais de Layout:")
+    df_humano, df_robo_inicial, msg_filtro_valor = _aplicar_filtros_valor_minimo(df_processado, config)
+    relatorio_final.append(f"10. {msg_filtro_valor}")
+    
+    df_humano, msg_ordenacao = _aplicar_ordenacao_humano(df_humano, config)
+    relatorio_final.append(f"11. {msg_ordenacao}")
+
+    df_robo_final = pd.concat([df_humano, df_robo_inicial], ignore_index=True)
+
+    df_humano_final, msgs_ajustes = _aplicar_ajustes_finais(df_humano)
+    relatorio_final.append("12. Ajustes Finais de Layout (Humano):")
     for msg in msgs_ajustes:
         relatorio_final.append(f"   - {msg}")
         
-    df_final, msg_formatacao = _formatar_e_limpar_para_exportacao(df_final)
-    relatorio_final.append(f"11. {msg_formatacao}")
+    df_humano_final, msg_formatacao = _formatar_e_limpar_para_exportacao(df_humano_final)
+    relatorio_final.append(f"13. {msg_formatacao}")
 
-    relatorio_final.append(f"12. Registros Finais para Exportação: {len(df_final)}")
+    relatorio_final.append(f"14. Registros Finais para Exportação (Humano): {len(df_humano_final)}")
+    relatorio_final.append(f"15. Registros Finais para Exportação (Robô): {len(df_robo_final)}")
     relatorio_final.append("="*75 + "\n")
     
     for linha in relatorio_final:
         logger.info(linha)
     
-    return df_final
+    return df_humano_final, df_robo_final
