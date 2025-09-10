@@ -3,7 +3,6 @@
 [![opensource](https://badges.frapsoft.com/os/v1/open-source.png?v=103)](#)
 [![licença](https://img.shields.io/badge/licença-GPL%20v3-blue.svg)](LICENSE.txt)
 [![Python](https://img.shields.io/badge/python-3.8+-green.svg)](https://www.python.org/)
-[![Estrelas](https://img.shields.io/github/stars/AndreBFarias/Automacao-Mailing.svg?style=social)](https://github.com/AndreBFarias/Automacao-Mailing/stargazers)
 [![Contribuições](https://img.shields.io/badge/contribuições-bem--vindas-brightgreen.svg)](https://github.com/AndreBFarias/Automacao-Mailing/issues)
 
 <div style="text-align: center;">
