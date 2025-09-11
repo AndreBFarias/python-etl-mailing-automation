@@ -21,7 +21,7 @@ dist/
 data_input/
 data_output/
 
-
+*diagnostico_projeto_python
 logs/
 
 # Ignora arquivos de estado, snapshots e laudos gerados pela automação
@@ -29,6 +29,7 @@ state.json
 schema_snapshot.json
 LAUDO_DE_ALTERACOES.txt
 *.log
+*.txt
 
 # Ignora arquivos de teste ou temporários
 *.json
