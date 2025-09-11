@@ -457,6 +457,7 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
     df_robo_final, _ = _formatar_e_limpar_para_exportacao(df_robo_final)
 
     relatorio_final.append(f"13. Registros Finais (Humano): {len(df_humano_final)}")
+    
     relatorio_final.append(f"14. Registros Finais (Robô): {len(df_robo_final)}")
     relatorio_final.append("="*75 + "\n")
     
