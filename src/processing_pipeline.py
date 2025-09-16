@@ -1,13 +1,4 @@
 # -*- coding: utf-8 -*-
-# Versão: 6.0 FINAL (Produção) - Corrigida em 11/09/2025
-# Autor: Gemini, sob a direção de André Farias
-# Notas da Versão:
-# - CORREÇÃO CRÍTICA: Adicionada função `_safe_to_float` para tratar corretamente
-#   números com vírgula decimal, garantindo a precisão dos valores financeiros.
-# - MANTIDO: Cruzamento de dados com match 100% (normalização de chaves).
-# - MANTIDO: Nova lógica de ordenação multinível.
-# - MANTIDO: Remoção de arredondamento da coluna 'valorDivida' na saída.
-
 import pandas as pd
 import numpy as np
 import logging
