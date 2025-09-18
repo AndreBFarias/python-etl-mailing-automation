@@ -27,14 +27,25 @@ def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
 def _safe_to_float(series: pd.Series) -> pd.Series:
     """
     Converte uma coluna para float de forma segura, tratando vírgulas como separadores decimais.
-    Esta função é usada для CÁLCULOS PONTUAIS, não para alterar o tipo de dado da coluna principal.
+    Esta função é usada para CÁLCULOS PONTUAIS, não para alterar o tipo de dado da coluna principal.
     """
     series_str = series.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
     return pd.to_numeric(series_str, errors='coerce')
 
+# def _tratar_colunas_rebeldes(df: pd.DataFrame) -> pd.DataFrame:
+#     # HOMOLOGAÇÃO: Lógica antiga que convertia prematuramente os tipos para float, causando a perda de precisão.
+#     logger.info("Iniciando tratamento de colunas iniciais...")
+#     financial_cols = ['liquido', 'total_toi', 'valor']
+#     for col in financial_cols:
+#         if col in df.columns:
+#             df[col] = _safe_to_float(df[col])
+#             logger.info(f"Coluna '{col}' convertida para float com sucesso, preservando decimais.")
+#     # ... (resto da função antiga)
+#     return df
+
 def _tratar_colunas_rebeldes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Limpa colunas problemáticas, mas mantém os valores financeiros como STRINGS
+    NOVA LÓGICA: Limpa colunas problemáticas, mas mantém os valores financeiros como STRINGS
     para preservar a precisão original. Também remove o caractere BOM (fantasma).
     """
     logger.info("Iniciando tratamento de colunas iniciais (preservando strings)...")
@@ -57,6 +68,7 @@ def _tratar_colunas_rebeldes(df: pd.DataFrame) -> pd.DataFrame:
 
     logger.info("Tratamento de colunas iniciais concluído.")
     return df
+
 
 # --- FUNÇÕES DE PROCESSAMENTO ---
 # (As funções _remover_clientes_proibidos, _remover_duplicatas_inteligentemente, _remover_pagamentos, _enriquecer_telefones, _criar_cliente_regulariza_from_mailing, e _manter_apenas_nao_bloqueados permanecem inalteradas)
@@ -228,25 +240,6 @@ def _manter_apenas_nao_bloqueados(df: pd.DataFrame, config: ConfigParser) -> tup
     logger.info(msg)
     return df_filtrado, msg
 
-# def _calcular_colunas_agregadas(df: pd.DataFrame) -> pd.DataFrame:
-#     # HOMOLOGAÇÃO: Lógica antiga que criava 'valordivida' como float, causando inconsistência.
-#     logger.info("Calculando colunas agregadas (valordivida, Quantidade_UC_por_CPF, Ucs_do_CPF).")
-#     if 'ncpf' in df.columns and 'liquido' in df.columns:
-#         df['valordivida'] = df.groupby('ncpf')['liquido'].transform(lambda x: _safe_to_float(x).sum())
-#     else:
-#         logger.error("Colunas 'ncpf' ou 'liquido' não encontradas. Impossível calcular 'valordivida'.")
-#         df['valordivida'] = 0
-#     if 'ncpf' in df.columns and 'ucv' in df.columns:
-#         df['ucv'] = df['ucv'].astype(str)
-#         uc_por_cpf = df.groupby('ncpf')['ucv'].apply(lambda x: ', '.join(x.unique()))
-#         df['Ucs_do_CPF'] = df['ncpf'].map(uc_por_cpf)
-#         df['Quantidade_UC_por_CPF'] = df['ncpf'].map(uc_por_cpf.apply(lambda x: len(x.split(', '))))
-#     else:
-#         logger.error("Colunas 'ncpf' ou 'ucv' não encontradas. Impossível calcular UCs.")
-#         df['Quantidade_UC_por_CPF'] = 0
-#         df['Ucs_do_CPF'] = ''
-#     return df
-
 def _calcular_colunas_agregadas(df: pd.DataFrame) -> pd.DataFrame:
     """
     NOVA LÓGICA: Calcula a 'valordivida' e a converte imediatamente para o formato de texto
@@ -272,37 +265,76 @@ def _calcular_colunas_agregadas(df: pd.DataFrame) -> pd.DataFrame:
         df['Ucs_do_CPF'] = ''
     return df
 
-def _aplicar_filtros_valor_minimo(df: pd.DataFrame, config: ConfigParser) -> Tuple[pd.DataFrame, str]:
-    logger.info("Aplicando filtros de valor mínimo para mailing humano.")
-    if not config.has_section('FILTROS_VALOR_MINIMO_HUMANO'):
-        msg = "AVISO: Seção [FILTROS_VALOR_MINIMO_HUMANO] não encontrada. Nenhum filtro de valor aplicado."
+def _aplicar_filtros_estrategicos(df: pd.DataFrame, config: ConfigParser) -> Tuple[pd.DataFrame, pd.DataFrame, str]:
+    """
+    Segmenta o DataFrame em mailing humano e do robô com base
+    nas regras estratégicas definidas no config.ini.
+    """
+    logger.info("Aplicando filtros estratégicos de segmentação (Humano vs. Robô).")
+    
+    lista_df_humano = []
+    lista_df_robo = []
+    
+    regras = [s for s in config.sections() if s.startswith('REGRAS_GRUPO')]
+    if not regras:
+        msg = "AVISO: Nenhuma seção [REGRAS_GRUPO_] encontrada no config.ini. Nenhum filtro aplicado."
         logger.warning(msg)
-        return df, msg
+        # Retorna o df original para o robô e um df vazio para o humano para não quebrar o fluxo.
+        return pd.DataFrame(), df, msg
 
-    col_divida = config.get('FILTROS_VALOR_MINIMO_HUMANO', 'coluna_divida_filtro', fallback='valordivida').lower()
-    empresas_especiais_str = config.get('FILTROS_VALOR_MINIMO_HUMANO', 'empresas_corte_especial', fallback='')
-    corte_especial = config.getfloat('FILTROS_VALOR_MINIMO_HUMANO', 'valor_corte_especial', fallback=500.0)
-    corte_geral = config.getfloat('FILTROS_VALOR_MINIMO_HUMANO', 'valor_corte_geral', fallback=200.0)
-    empresas_especiais = [e.strip().upper() for e in empresas_especiais_str.split(',')]
-
-    if col_divida not in df.columns:
-        msg = f"ERRO: Coluna de dívida '{col_divida}' não encontrada. Filtro de valor mínimo abortado."
-        logger.error(msg)
-        return df, msg
-
-    # Usa a função _safe_to_float para a comparação, sem alterar a coluna original que é string.
-    valordivida_numeric = _safe_to_float(df[col_divida])
-    cond_especial = (df['empresa'].str.upper().isin(empresas_especiais)) & (valordivida_numeric >= corte_especial)
-    cond_geral = (~df['empresa'].str.upper().isin(empresas_especiais)) & (valordivida_numeric >= corte_geral)
+    df_processado = df.copy()
     
-    df_humano = df[cond_especial | cond_geral].copy()
+    for nome_regra in regras:
+        logger.info(f"Processando {nome_regra}...")
+        
+        empresas_str = config.get(nome_regra, 'empresas', fallback='')
+        empresas = [e.strip().upper() for e in empresas_str.split(',')]
+        
+        col_divida = config.get(nome_regra, 'coluna_divida_filtro', fallback='valordivida').lower()
+        corte_humano = config.getfloat(nome_regra, 'corte_humano_maior_igual', fallback=0.0)
+        regra_robo = config.get(nome_regra, 'regra_robo', fallback='').lower()
+
+        if col_divida not in df_processado.columns:
+            logger.error(f"ERRO em [{nome_regra}]: Coluna de dívida '{col_divida}' não encontrada. Pulando esta regra.")
+            continue
+
+        # Isola o sub-dataframe para esta regra
+        df_grupo = df_processado[df_processado['empresa'].str.upper().isin(empresas)]
+        
+        # Garante que a coluna de dívida seja numérica para a comparação
+        valordivida_numeric = _safe_to_float(df_grupo[col_divida])
+
+        # Segmentação Humano
+        df_humano_grupo = df_grupo[valordivida_numeric >= corte_humano]
+        lista_df_humano.append(df_humano_grupo)
+        logger.info(f"  - {nome_regra} (Humano): {len(df_humano_grupo)} registros selecionados (dívida >= {corte_humano}).")
+
+        # Segmentação Robô
+        if regra_robo == 'menor_que_corte_humano':
+            df_robo_grupo = df_grupo[valordivida_numeric < corte_humano]
+            logger.info(f"  - {nome_regra} (Robô): {len(df_robo_grupo)} registros selecionados (dívida < {corte_humano}).")
+        elif regra_robo == 'todos':
+            df_robo_grupo = df_grupo.copy() # Copia todos do grupo
+            logger.info(f"  - {nome_regra} (Robô): {len(df_robo_grupo)} registros selecionados (regra 'todos').")
+        else:
+            df_robo_grupo = pd.DataFrame() # Regra desconhecida, não seleciona ninguém
+            logger.warning(f"  - {nome_regra} (Robô): Regra '{regra_robo}' desconhecida. Nenhum registro selecionado.")
+            
+        lista_df_robo.append(df_robo_grupo)
+
+    df_humano_final = pd.concat(lista_df_humano, ignore_index=True) if lista_df_humano else pd.DataFrame()
+    df_robo_final = pd.concat(lista_df_robo, ignore_index=True) if lista_df_robo else pd.DataFrame()
     
-    msg = f"Filtro de Valor Mínimo: {len(df_humano)} para mailing humano."
+    msg = f"Segmentação Estratégica: {len(df_humano_final)} para mailing humano, {len(df_robo_final)} para mailing do robô."
     logger.info(msg)
-    return df_humano, msg
+    
+    return df_humano_final, df_robo_final, msg
 
 def _aplicar_ordenacao_humano(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
     logger.info("Aplicando nova ordenação estratégica no mailing humano.")
+    if df.empty:
+        return df, "Ordenação pulada: DataFrame humano vazio."
+        
     conditions = [
         (df['faixa'].str.upper() == 'A VENCER'),
         (df['sit'].str.upper() == 'LIGADO'),
@@ -415,36 +447,31 @@ def processar_dados(dataframes: Dict[str, pd.DataFrame], config: ConfigParser) -
     df_processado, msg_filtro_disp = _manter_apenas_nao_bloqueados(df_processado, config)
     relatorio_final.append(f"8. {msg_filtro_disp}")
     
-    df_robo_mestre = df_processado.copy()
+    df_antes_segmentacao = df_processado.copy()
     
-    # CORREÇÃO CRÍTICA: Renomeia as colunas para o padrão do robô ANTES de retornar o df.
-    # Isso resolve a crise de identidade e o KeyError.
-    mapa_renomeacao_robo = {
-        'nomecad': 'NOME_CLIENTE', 'empresa': 'PRODUTO', 'ncpf': 'CPF',
-        'totfat': 'parcelasEmAtrado', 'valordivida': 'valorDivida'
-    }
-    df_robo_mestre.rename(columns=mapa_renomeacao_robo, inplace=True)
-    logger.info("Colunas renomeadas para o padrão do Robô no DataFrame Mestre.")
+    # NOVA LÓGICA DE SEGMENTAÇÃO
+    df_humano, df_robo, msg_segmentacao = _aplicar_filtros_estrategicos(df_antes_segmentacao, config)
+    relatorio_final.append(f"9. {msg_segmentacao}")
     
-    relatorio_final.append(f"Checkpoint para Mailing Mestre do Robô criado com {len(df_robo_mestre)} registros.")
-    
-    df_humano, msg_filtro_valor = _aplicar_filtros_valor_minimo(df_processado, config)
-    relatorio_final.append(f"9. {msg_filtro_valor}")
-    
-    df_humano, msg_ordenacao = _aplicar_ordenacao_humano(df_humano, config)
+    df_humano_ordenado, msg_ordenacao = _aplicar_ordenacao_humano(df_humano, config)
     relatorio_final.append(f"10. {msg_ordenacao}")
 
-    df_humano_final, msgs_ajustes = _aplicar_ajustes_finais(df_humano)
+    # Ajustes finais são aplicados em ambos os mailings para consistência de colunas
+    df_humano_final, msgs_ajustes_humano = _aplicar_ajustes_finais(df_humano_ordenado)
     relatorio_final.append("11. Ajustes Finais de Layout (Humano):")
-    for msg in msgs_ajustes: relatorio_final.append(f"   - {msg}")
+    for msg in msgs_ajustes_humano: relatorio_final.append(f"   - {msg}")
         
-    df_humano_final, msg_formatacao = _formatar_e_limpar_para_exportacao(df_humano_final)
-    relatorio_final.append(f"12. {msg_formatacao}")
+    df_robo_final, msgs_ajustes_robo = _aplicar_ajustes_finais(df_robo)
+    relatorio_final.append("12. Ajustes Finais de Layout (Robô):")
+    for msg in msgs_ajustes_robo: relatorio_final.append(f"   - {msg}")
 
+    # A limpeza de strings de exportação não é mais necessária aqui, será feita nos módulos finais.
+    
     relatorio_final.append(f"13. Registros Finais (Humano): {len(df_humano_final)}")
+    relatorio_final.append(f"14. Registros Finais (Robô): {len(df_robo_final)}")
     
     relatorio_final.append("="*75 + "\n")
     
     for linha in relatorio_final: logger.info(linha)
     
-    return df_humano_final, df_robo_mestre
+    return df_humano_final, df_robo_final

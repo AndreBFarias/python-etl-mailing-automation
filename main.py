@@ -11,8 +11,8 @@ from src.processing_pipeline import processar_dados
 from src.data_exporter import exportar_dados_humanos
 from src.gerador_robo_mestre import gerar_arquivo_robo_mestre
 from src.formatador_dados import formatar_csvs_para_padrao_br
-# CORREÇÃO: Importa o novo nome da função de polimento.
-from src.final_sanitizer import exorcizar_fantasmas, polir_colunas_do_robo
+# CORREÇÃO: Importa TODAS as funções necessárias do sanitizer.
+from src.final_sanitizer import exorcizar_fantasmas, polir_colunas_do_robo, polir_colunas_humanas
 from src.compressor import organize_and_compress_output
 
 
@@ -72,8 +72,9 @@ def main():
 
         logging.info("--- ESTÁGIO 5: Sanitização Final (Fantasmas e Colunas) ---")
         exorcizar_fantasmas(pasta_do_dia)
-        # CORREÇÃO: Chama a função pelo seu novo nome.
         polir_colunas_do_robo(pasta_do_dia)
+        # CORREÇÃO: A chamada que faltava foi adicionada.
+        polir_colunas_humanas(pasta_do_dia)
         logging.info("--- ESTÁGIO 5 CONCLUÍDO ---")
         
         logging.info("--- ESTÁGIO 6: Organizando e Comprimindo a saída ---")
