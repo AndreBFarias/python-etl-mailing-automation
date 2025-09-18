@@ -6,12 +6,12 @@ from tqdm import tqdm
 from configparser import ConfigParser
 from datetime import datetime
 import re
+from typing import Tuple, Dict
 
 logger = logging.getLogger(__name__)
 tqdm.pandas(desc="Processando mailing")
 
 # --- FUNÇÕES UTILITÁRIAS ---
-
 def _clean_phone_number(phone_val):
     if pd.isna(phone_val):
         return None
@@ -24,79 +24,77 @@ def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
         df.columns = [str(col).strip().lower() for col in df.columns]
     return df
 
-# CORREÇÃO: Nova função para tratar números com vírgula decimal
 def _safe_to_float(series: pd.Series) -> pd.Series:
-    """Converte uma coluna para float de forma segura, tratando vírgulas como separadores decimais."""
+    """
+    Converte uma coluna para float de forma segura, tratando vírgulas como separadores decimais.
+    Esta função é usada для CÁLCULOS PONTUAIS, não para alterar o tipo de dado da coluna principal.
+    """
     series_str = series.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
     return pd.to_numeric(series_str, errors='coerce')
 
 def _tratar_colunas_rebeldes(df: pd.DataFrame) -> pd.DataFrame:
-    logger.info("Iniciando tratamento de colunas iniciais...")
+    """
+    Limpa colunas problemáticas, mas mantém os valores financeiros como STRINGS
+    para preservar a precisão original. Também remove o caractere BOM (fantasma).
+    """
+    logger.info("Iniciando tratamento de colunas iniciais (preservando strings)...")
     
-    # CORREÇÃO: Aplica a conversão segura para float nas colunas financeiras logo no início.
     financial_cols = ['liquido', 'total_toi', 'valor']
     for col in financial_cols:
         if col in df.columns:
-            df[col] = _safe_to_float(df[col])
-            logger.info(f"Coluna '{col}' convertida para float com sucesso, preservando decimais.")
+            df[col] = df[col].astype(str).str.strip()
+            logger.info(f"Coluna '{col}' limpa e mantida como string.")
+
+    if 'empresa' in df.columns:
+        df['empresa'] = df['empresa'].astype(str).str.replace('\ufeff', '', regex=False).str.strip()
+        logger.info("Coluna 'empresa' limpa de caracteres fantasmas (BOM).")
 
     if 'faixa' in df.columns:
         df['faixa'] = df['faixa'].astype(str).str.replace('Ã©', 'é', regex=False)
-    if 'ndoc' in df.columns:
-        numeric_ndoc = pd.to_numeric(df['ndoc'], errors='coerce')
-        df['ndoc'] = numeric_ndoc.apply(lambda x: f'{x:.0f}' if pd.notna(x) else '')
     
+    if 'ndoc' in df.columns:
+        df['ndoc'] = df['ndoc'].astype(str).str.replace(r'\.0$', '', regex=True)
+
     logger.info("Tratamento de colunas iniciais concluído.")
     return df
 
 # --- FUNÇÕES DE PROCESSAMENTO ---
-
+# (As funções _remover_clientes_proibidos, _remover_duplicatas_inteligentemente, _remover_pagamentos, _enriquecer_telefones, _criar_cliente_regulariza_from_mailing, e _manter_apenas_nao_bloqueados permanecem inalteradas)
 def _remover_clientes_proibidos(df_mailing: pd.DataFrame, df_bloqueio_input: pd.DataFrame | dict | None, config: ConfigParser) -> tuple[pd.DataFrame, str]:
     logger.info("Iniciando remoção unificada de clientes com base no arquivo de tabulações.")
-    
     df_bloqueio = None
     if isinstance(df_bloqueio_input, dict) and df_bloqueio_input:
         first_sheet_name = next(iter(df_bloqueio_input))
         df_bloqueio = df_bloqueio_input[first_sheet_name]
     elif isinstance(df_bloqueio_input, pd.DataFrame):
         df_bloqueio = df_bloqueio_input
-
     if df_bloqueio is None or df_bloqueio.empty:
         msg = "Remoção por Tabulação: Arquivo de regras não encontrado ou vazio. Etapa pulada."
         logger.warning(msg)
         return df_mailing, msg
-
     key_bloqueio = config.get('SCHEMA_TABULACOES', 'primary_key', fallback='idcliente').lower()
     key_mailing = config.get('SCHEMA_MAILING', 'mailing_key_for_removals', fallback='ncpf').lower()
     status_col = config.get('SCHEMA_TABULACOES', 'coluna_status', fallback='status').lower()
     status_para_remover_str = config.get('SCHEMA_TABULACOES', 'status_para_remover', fallback='')
     status_para_remover = [s.strip().lower() for s in status_para_remover_str.split('\n') if s.strip()]
-
     if key_bloqueio not in df_bloqueio.columns or key_mailing not in df_mailing.columns:
         msg = f"AVISO: Chave para remoção não encontrada ('{key_mailing}' no mailing ou '{key_bloqueio}' nas tabulações). Etapa pulada."
         logger.warning(msg)
         return df_mailing, msg
-
     tamanho_inicial = len(df_mailing)
-    
     ids_por_status = set()
     if status_col in df_bloqueio.columns and status_para_remover:
         df_filtrado_status = df_bloqueio[df_bloqueio[status_col].astype(str).str.strip().str.lower().isin(status_para_remover)]
         ids_por_status = set(df_filtrado_status[key_bloqueio].astype(str).str.strip().str.replace(r'\.0$', '', regex=True))
         logger.info(f"Encontrados {len(ids_por_status)} IDs para remoção com base em {len(status_para_remover)} status.")
-
     ids_totais_no_arquivo = set(df_bloqueio[key_bloqueio].astype(str).str.strip().str.replace(r'\.0$', '', regex=True))
-    
     ids_para_remover = ids_totais_no_arquivo.union(ids_por_status)
     logger.info(f"Total de {len(ids_para_remover)} IDs únicos a serem removidos do mailing.")
-    
     mailing_keys_cleaned = df_mailing[key_mailing].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
     df_filtrado = df_mailing[~mailing_keys_cleaned.isin(ids_para_remover)]
-    
     removidos = tamanho_inicial - len(df_filtrado)
     msg = f"Remoção Unificada por Tabulação: {removidos} registros removidos. Restantes: {len(df_filtrado)}."
     logger.info(msg)
-    
     return df_filtrado, msg
 
 def _remover_duplicatas_inteligentemente(df: pd.DataFrame, chave_primaria: str) -> tuple[pd.DataFrame, str]:
@@ -104,22 +102,16 @@ def _remover_duplicatas_inteligentemente(df: pd.DataFrame, chave_primaria: str) 
         msg = f"AVISO: Chave primária '{chave_primaria}' para deduplicação não encontrada. Etapa pulada."
         logger.warning(msg)
         return df, msg
-    
     tamanho_inicial = len(df)
     if not df.duplicated(subset=[chave_primaria]).any():
         msg = "Deduplicação Inteligente: Nenhum registro duplicado encontrado."
         logger.info(msg)
         return df, msg
-
     logger.info("Iniciando deduplicação inteligente para preservar os registros mais completos.")
     df['has_name'] = df['nomecad'].notna()
-    
     df_sorted = df.sort_values(by=[chave_primaria, 'has_name'], ascending=[True, False])
-    
     df_deduplicado = df_sorted.drop_duplicates(subset=[chave_primaria], keep='first')
-    
     df_final = df_deduplicado.drop(columns=['has_name'])
-    
     tamanho_final = len(df_final)
     removidos = tamanho_inicial - tamanho_final
     msg = f"Deduplicação Inteligente por '{chave_primaria}': Removidos {removidos} registros. Restantes: {tamanho_final}."
@@ -131,7 +123,6 @@ def _remover_pagamentos(df_mailing: pd.DataFrame, df_pagamentos: pd.DataFrame) -
         msg = "Remoção de Pagos: Nenhum arquivo de pagamento encontrado ou processado. Etapa pulada."
         logger.warning(msg)
         return df_mailing, msg
-
     logger.info("Iniciando remoção de clientes com pagamentos registrados.")
     tamanho_inicial = len(df_mailing)
     chave_cols = ['empresa', 'ucv', 'ano', 'mes']
@@ -142,7 +133,6 @@ def _remover_pagamentos(df_mailing: pd.DataFrame, df_pagamentos: pd.DataFrame) -
             return df_mailing, msg
         df_mailing[col] = df_mailing[col].astype(str).str.strip()
         df_pagamentos[col] = df_pagamentos[col].astype(str).str.strip()
-
     df_mailing['chave_pagamento'] = df_mailing[chave_cols].agg(''.join, axis=1)
     df_pagamentos['chave_pagamento'] = df_pagamentos[chave_cols].agg(''.join, axis=1)
     df_pagamentos = df_pagamentos.drop_duplicates(subset=['chave_pagamento'])
@@ -155,51 +145,40 @@ def _remover_pagamentos(df_mailing: pd.DataFrame, df_pagamentos: pd.DataFrame) -
 
 def _enriquecer_telefones(df_mailing: pd.DataFrame, dataframes: dict) -> tuple[pd.DataFrame, str]:
     logger.info("Iniciando enriquecimento de telefones.")
-    
     for i in range(1, 5):
         df_mailing[f'telefone_0{i}'] = np.nan
-
     if 'enriquecimento' not in dataframes or not isinstance(dataframes['enriquecimento'], dict):
         msg = "AVISO: Dados de enriquecimento não encontrados. Etapa pulada."
         logger.warning(msg)
         return df_mailing, msg
-
     df_enriquecimento_dict = dataframes.get('enriquecimento', {})
     df_p100 = pd.DataFrame()
     df_p50 = pd.DataFrame()
-
     for sheet_name, df_sheet in df_enriquecimento_dict.items():
         if '100' in str(sheet_name):
             df_p100 = df_sheet
         elif '50' in str(sheet_name):
             df_p50 = df_sheet
-
     df_pontuacao = pd.concat([df_p100, df_p50], ignore_index=True)
-    
     colunas_pontuacao_necessarias = ['documento', 'telefone', 'pontuacao']
     if df_pontuacao.empty or not all(col in df_pontuacao.columns for col in colunas_pontuacao_necessarias):
         msg = "AVISO: Abas de pontuação válidas não encontradas. Etapa pulada."
         logger.warning(msg)
         return df_mailing, msg
-
     df_pontuacao = df_pontuacao[colunas_pontuacao_necessarias].dropna(subset=['documento', 'telefone'])
     df_pontuacao['join_key'] = df_pontuacao['documento'].astype(str).str.lower().str.strip()
     df_pontuacao['telefone'] = df_pontuacao['telefone'].apply(_clean_phone_number)
     df_pontuacao.dropna(subset=['join_key', 'telefone'], inplace=True)
     df_pontuacao = df_pontuacao.sort_values(by=['join_key', 'pontuacao'], ascending=[True, False])
-    
     telefones_agrupados = df_pontuacao.groupby('join_key')['telefone'].apply(list).reset_index()
     telefones_agrupados.rename(columns={'telefone': 'telefones_enriquecidos'}, inplace=True)
-    
     if 'ndoc' not in df_mailing.columns:
         msg = "ERRO: Coluna 'ndoc' não encontrada no mailing. Enriquecimento abortado."
         logger.error(msg)
         return df_mailing, msg
-        
     df_mailing['join_key'] = df_mailing['ndoc'].astype(str).str.lower().str.strip()
     df_final = pd.merge(df_mailing, telefones_agrupados, on='join_key', how='left')
     matches = df_final['telefones_enriquecidos'].notna().sum()
-    
     def popular_telefones(row):
         telefones_enriquecidos = row['telefones_enriquecidos'] if isinstance(row['telefones_enriquecidos'], list) else []
         telefones_mailing = []
@@ -213,40 +192,14 @@ def _enriquecer_telefones(df_mailing: pd.DataFrame, dataframes: dict) -> tuple[p
         for i in range(4):
             row[f'telefone_0{i+1}'] = todos_telefones[i] if i < len(todos_telefones) else np.nan
         return row
-
     df_final = df_final.progress_apply(popular_telefones, axis=1)
     df_final = df_final.drop(columns=['join_key', 'telefones_enriquecidos'], errors='ignore')
-    
     msg = f"Enriquecimento de Telefones: {matches} clientes tiveram telefones encontrados."
     logger.info(msg)
     return df_final, msg
 
-def _calcular_colunas_agregadas(df: pd.DataFrame) -> pd.DataFrame:
-    logger.info("Calculando colunas agregadas (valordivida, Quantidade_UC_por_CPF, Ucs_do_CPF).")
-    
-    if 'ncpf' in df.columns and 'liquido' in df.columns:
-        # A coluna 'liquido' já é float, então apenas preenchemos nulos.
-        df['valordivida'] = df.groupby('ncpf')['liquido'].transform('sum')
-    else:
-        logger.error("Colunas 'ncpf' ou 'liquido' não encontradas. Impossível calcular 'valordivida'.")
-        df['valordivida'] = 0
-
-    if 'ncpf' in df.columns and 'ucv' in df.columns:
-        df['ucv'] = df['ucv'].astype(str)
-        uc_por_cpf = df.groupby('ncpf')['ucv'].apply(lambda x: ', '.join(x.unique()))
-        
-        df['Ucs_do_CPF'] = df['ncpf'].map(uc_por_cpf)
-        df['Quantidade_UC_por_CPF'] = df['ncpf'].map(uc_por_cpf.apply(lambda x: len(x.split(', '))))
-    else:
-        logger.error("Colunas 'ncpf' ou 'ucv' não encontradas. Impossível calcular UCs.")
-        df['Quantidade_UC_por_CPF'] = 0
-        df['Ucs_do_CPF'] = ''
-
-    return df
-
 def _criar_cliente_regulariza_from_mailing(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
     logger.info("Criando a coluna 'Cliente_Regulariza'.")
-    
     fonte_col = 'venc_maior_1ano'
     if fonte_col in df.columns:
         df['Cliente_Regulariza'] = np.where(
@@ -264,12 +217,10 @@ def _criar_cliente_regulariza_from_mailing(df: pd.DataFrame) -> tuple[pd.DataFra
 def _manter_apenas_nao_bloqueados(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
     logger.info("Iniciando filtro de registros bloqueados (mantendo apenas 'N').")
     coluna_filtro = config.get('SCHEMA_MAILING', 'coluna_filtro_status', fallback='bloq').lower()
-
     if coluna_filtro not in df.columns:
         msg = f"Filtro de Bloqueio: Coluna '{coluna_filtro}' não encontrada. Etapa pulada."
         logger.error(msg)
         return df, msg
-
     tamanho_inicial = len(df)
     df_filtrado = df[df[coluna_filtro].astype(str).str.strip().str.upper() == 'N']
     removidos = tamanho_inicial - len(df_filtrado)
@@ -277,12 +228,56 @@ def _manter_apenas_nao_bloqueados(df: pd.DataFrame, config: ConfigParser) -> tup
     logger.info(msg)
     return df_filtrado, msg
 
-def _aplicar_filtros_valor_minimo(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+# def _calcular_colunas_agregadas(df: pd.DataFrame) -> pd.DataFrame:
+#     # HOMOLOGAÇÃO: Lógica antiga que criava 'valordivida' como float, causando inconsistência.
+#     logger.info("Calculando colunas agregadas (valordivida, Quantidade_UC_por_CPF, Ucs_do_CPF).")
+#     if 'ncpf' in df.columns and 'liquido' in df.columns:
+#         df['valordivida'] = df.groupby('ncpf')['liquido'].transform(lambda x: _safe_to_float(x).sum())
+#     else:
+#         logger.error("Colunas 'ncpf' ou 'liquido' não encontradas. Impossível calcular 'valordivida'.")
+#         df['valordivida'] = 0
+#     if 'ncpf' in df.columns and 'ucv' in df.columns:
+#         df['ucv'] = df['ucv'].astype(str)
+#         uc_por_cpf = df.groupby('ncpf')['ucv'].apply(lambda x: ', '.join(x.unique()))
+#         df['Ucs_do_CPF'] = df['ncpf'].map(uc_por_cpf)
+#         df['Quantidade_UC_por_CPF'] = df['ncpf'].map(uc_por_cpf.apply(lambda x: len(x.split(', '))))
+#     else:
+#         logger.error("Colunas 'ncpf' ou 'ucv' não encontradas. Impossível calcular UCs.")
+#         df['Quantidade_UC_por_CPF'] = 0
+#         df['Ucs_do_CPF'] = ''
+#     return df
+
+def _calcular_colunas_agregadas(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    NOVA LÓGICA: Calcula a 'valordivida' e a converte imediatamente para o formato de texto
+    com vírgula, mantendo a consistência de tipo com as outras colunas financeiras.
+    """
+    logger.info("Calculando colunas agregadas (valordivida, Quantidade_UC_por_CPF, Ucs_do_CPF).")
+    if 'ncpf' in df.columns and 'liquido' in df.columns:
+        soma_divida = df.groupby('ncpf')['liquido'].transform(lambda x: _safe_to_float(x).sum())
+        # Converte o resultado numérico para string no padrão brasileiro imediatamente.
+        df['valordivida'] = soma_divida.apply(lambda x: f'{x:.2f}'.replace('.', ',') if pd.notna(x) else '0,00')
+    else:
+        logger.error("Colunas 'ncpf' ou 'liquido' não encontradas. Impossível calcular 'valordivida'.")
+        df['valordivida'] = '0,00'
+        
+    if 'ncpf' in df.columns and 'ucv' in df.columns:
+        df['ucv'] = df['ucv'].astype(str)
+        uc_por_cpf = df.groupby('ncpf')['ucv'].apply(lambda x: ', '.join(x.unique()))
+        df['Ucs_do_CPF'] = df['ncpf'].map(uc_por_cpf)
+        df['Quantidade_UC_por_CPF'] = df['ncpf'].map(uc_por_cpf.apply(lambda x: len(x.split(', '))))
+    else:
+        logger.error("Colunas 'ncpf' ou 'ucv' não encontradas. Impossível calcular UCs.")
+        df['Quantidade_UC_por_CPF'] = 0
+        df['Ucs_do_CPF'] = ''
+    return df
+
+def _aplicar_filtros_valor_minimo(df: pd.DataFrame, config: ConfigParser) -> Tuple[pd.DataFrame, str]:
     logger.info("Aplicando filtros de valor mínimo para mailing humano.")
     if not config.has_section('FILTROS_VALOR_MINIMO_HUMANO'):
         msg = "AVISO: Seção [FILTROS_VALOR_MINIMO_HUMANO] não encontrada. Nenhum filtro de valor aplicado."
         logger.warning(msg)
-        return df, pd.DataFrame(), msg
+        return df, msg
 
     col_divida = config.get('FILTROS_VALOR_MINIMO_HUMANO', 'coluna_divida_filtro', fallback='valordivida').lower()
     empresas_especiais_str = config.get('FILTROS_VALOR_MINIMO_HUMANO', 'empresas_corte_especial', fallback='')
@@ -293,25 +288,21 @@ def _aplicar_filtros_valor_minimo(df: pd.DataFrame, config: ConfigParser) -> tup
     if col_divida not in df.columns:
         msg = f"ERRO: Coluna de dívida '{col_divida}' não encontrada. Filtro de valor mínimo abortado."
         logger.error(msg)
-        return df, pd.DataFrame(), msg
+        return df, msg
 
-    df[col_divida] = pd.to_numeric(df[col_divida], errors='coerce')
-    cond_especial = (df['empresa'].str.upper().isin(empresas_especiais)) & (df[col_divida] >= corte_especial)
-    cond_geral = (~df['empresa'].str.upper().isin(empresas_especiais)) & (df[col_divida] >= corte_geral)
+    # Usa a função _safe_to_float para a comparação, sem alterar a coluna original que é string.
+    valordivida_numeric = _safe_to_float(df[col_divida])
+    cond_especial = (df['empresa'].str.upper().isin(empresas_especiais)) & (valordivida_numeric >= corte_especial)
+    cond_geral = (~df['empresa'].str.upper().isin(empresas_especiais)) & (valordivida_numeric >= corte_geral)
     
     df_humano = df[cond_especial | cond_geral].copy()
-    df_robo = df[~(cond_especial | cond_geral)].copy()
     
-    msg = f"Filtro de Valor Mínimo: {len(df_humano)} para mailing humano, {len(df_robo)} para o robô."
+    msg = f"Filtro de Valor Mínimo: {len(df_humano)} para mailing humano."
     logger.info(msg)
-    return df_humano, df_robo, msg
+    return df_humano, msg
 
 def _aplicar_ordenacao_humano(df: pd.DataFrame, config: ConfigParser) -> tuple[pd.DataFrame, str]:
     logger.info("Aplicando nova ordenação estratégica no mailing humano.")
-
-    # HOMOLOGAÇÃO: Lógica de ordenação antiga foi removida para clareza.
-    
-    # CORREÇÃO: Nova lógica de ordenação multinível.
     conditions = [
         (df['faixa'].str.upper() == 'A VENCER'),
         (df['sit'].str.upper() == 'LIGADO'),
@@ -321,9 +312,11 @@ def _aplicar_ordenacao_humano(df: pd.DataFrame, config: ConfigParser) -> tuple[p
     ]
     priorities = [1, 2, 3, 4, 5]
     df['priority_level'] = np.select(conditions, priorities, default=6)
-
-    df_ordenado = df.sort_values(by=['priority_level', 'valordivida'], ascending=[True, False])
-    df_ordenado = df_ordenado.drop(columns=['priority_level'])
+    
+    # Converte 'valordivida' para numérico apenas para a ordenação.
+    df['valordivida_numeric_sort'] = _safe_to_float(df['valordivida'])
+    df_ordenado = df.sort_values(by=['priority_level', 'valordivida_numeric_sort'], ascending=[True, False])
+    df_ordenado = df_ordenado.drop(columns=['priority_level', 'valordivida_numeric_sort'])
     
     msg = "Nova ordenação estratégica (Situação/Faixa > Valor da Dívida) aplicada com sucesso."
     logger.info(msg)
@@ -333,12 +326,10 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     logger.info("Aplicando ajustes finais de layout e mapeamento.")
     report_msgs = []
     df_ajustado = df.copy()
-    if 'empresa' in df_ajustado.columns:
-        df_ajustado['empresa'] = df_ajustado['empresa'].astype(str).str.replace('\ufeff', '', regex=False)
-    
+        
     mapa_renomeacao = {
         'nomecad': 'NOME_CLIENTE', 'empresa': 'PRODUTO', 'ncpf': 'CPF',
-        'totfat': 'parcelasEmAtraso', 'loc': 'LOCALIDADE',
+        'totfat': 'parcelasEmAtrado', 'loc': 'LOCALIDADE',
         'quantidades_de_acionamentos': 'Quantidades_de_Acionamentos',
         'telefone_01': 'TELEFONE_01', 'telefone_02': 'TELEFONE_02',
         'telefone_03': 'TELEFONE_03', 'telefone_04': 'TELEFONE_04',
@@ -346,16 +337,16 @@ def _aplicar_ajustes_finais(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     }
     df_ajustado.rename(columns=mapa_renomeacao, inplace=True)
     report_msgs.append("Renomeação de colunas aplicada.")
-
+    
     colunas_principais = [
-        'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtraso', 'Quantidade_UC_por_CPF',
+        'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtrado', 'Quantidade_UC_por_CPF',
         'Ucs_do_CPF', 'LOCALIDADE', 'valorDivida', 'Cliente_Regulariza', 'TELEFONE_01',
         'TELEFONE_02', 'TELEFONE_03', 'TELEFONE_04', 'Quantidades_de_Acionamentos', 'Data_de_Importacao'
     ]
     for col in colunas_principais:
         if col not in df_ajustado.columns:
-            df_ajustado[col] = np.nan
-    
+            df_ajustado[col] = ''
+            
     outras_colunas = [col for col in df_ajustado.columns if col not in colunas_principais]
     df_ajustado = df_ajustado[colunas_principais + outras_colunas]
     report_msgs.append(f"Reordenação de colunas aplicada.")
@@ -365,32 +356,25 @@ def _formatar_e_limpar_para_exportacao(df: pd.DataFrame) -> tuple[pd.DataFrame, 
     logger.info("Iniciando formatação e limpeza final para exportação.")
     df_formatado = df.copy()
     
-    coluna_divida_final = 'valorDivida'
-    
     for col in df_formatado.columns:
-        # CORREÇÃO: Não aplica formatação de string na coluna de dívida
-        if col == coluna_divida_final:
-            continue
         s = df_formatado[col].astype(str)
         s = s.str.replace(r'\.0$', '', regex=True)
         s = s.str.replace(r'^(nan|none|nat)$', '', case=False, regex=True)
         s = s.str.replace('NÃƒO', 'NÃO', regex=False)
         df_formatado[col] = s
-
-    # HOMOLOGAÇÃO: A formatação da coluna de dívida foi comentada para preservar a precisão do float.
-    # if coluna_divida_final in df_formatado.columns:
-    #     valor_numerico = pd.to_numeric(df_formatado[coluna_divida_final], errors='coerce')
-    #     df_formatado[coluna_divida_final] = valor_numerico.apply(
-    #         lambda x: f'{x:.2f}'.replace('.', ',') if pd.notna(x) else ''
-    #     )
-
-    msg = "Formatação final concluída. A coluna 'valorDivida' foi mantida como float."
+        
+    msg = "Formatação final (limpeza de strings) concluída."
     logger.info(msg)
     return df_formatado, msg
 
 # --- FUNÇÃO ORQUESTRADORA DO PIPELINE ---
 
-def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -> tuple[pd.DataFrame, pd.DataFrame]:
+def processar_dados(dataframes: Dict[str, pd.DataFrame], config: ConfigParser) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Orquestra todo o pipeline de limpeza, enriquecimento e filtragem.
+    Retorna dois DataFrames: um para o mailing humano (filtrado e processado) e
+    um para o mailing mestre do robô (completo, antes dos filtros de valor).
+    """
     relatorio_final = ["\n" + "="*25 + " RELATÓRIO FINAL DA ALQUIMIA " + "="*25]
     
     if 'mailing' not in dataframes or dataframes['mailing'].empty:
@@ -431,7 +415,20 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
     df_processado, msg_filtro_disp = _manter_apenas_nao_bloqueados(df_processado, config)
     relatorio_final.append(f"8. {msg_filtro_disp}")
     
-    df_humano, df_robo, msg_filtro_valor = _aplicar_filtros_valor_minimo(df_processado, config)
+    df_robo_mestre = df_processado.copy()
+    
+    # CORREÇÃO CRÍTICA: Renomeia as colunas para o padrão do robô ANTES de retornar o df.
+    # Isso resolve a crise de identidade e o KeyError.
+    mapa_renomeacao_robo = {
+        'nomecad': 'NOME_CLIENTE', 'empresa': 'PRODUTO', 'ncpf': 'CPF',
+        'totfat': 'parcelasEmAtrado', 'valordivida': 'valorDivida'
+    }
+    df_robo_mestre.rename(columns=mapa_renomeacao_robo, inplace=True)
+    logger.info("Colunas renomeadas para o padrão do Robô no DataFrame Mestre.")
+    
+    relatorio_final.append(f"Checkpoint para Mailing Mestre do Robô criado com {len(df_robo_mestre)} registros.")
+    
+    df_humano, msg_filtro_valor = _aplicar_filtros_valor_minimo(df_processado, config)
     relatorio_final.append(f"9. {msg_filtro_valor}")
     
     df_humano, msg_ordenacao = _aplicar_ordenacao_humano(df_humano, config)
@@ -444,14 +441,10 @@ def processar_dados(dataframes: dict[str, pd.DataFrame], config: ConfigParser) -
     df_humano_final, msg_formatacao = _formatar_e_limpar_para_exportacao(df_humano_final)
     relatorio_final.append(f"12. {msg_formatacao}")
 
-    df_robo_final, _ = _aplicar_ajustes_finais(df_robo)
-    df_robo_final, _ = _formatar_e_limpar_para_exportacao(df_robo_final)
-
     relatorio_final.append(f"13. Registros Finais (Humano): {len(df_humano_final)}")
     
-    relatorio_final.append(f"14. Registros Finais (Robô): {len(df_robo_final)}")
     relatorio_final.append("="*75 + "\n")
     
     for linha in relatorio_final: logger.info(linha)
     
-    return df_humano_final, df_robo_final
+    return df_humano_final, df_robo_mestre

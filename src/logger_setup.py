@@ -60,4 +60,3 @@ if __name__ == '__main__':
     logging.error("Ocorreu um erro hipotético.")
     logging.critical("Falha crítica! O universo pode implodir.")
     print("Teste do módulo de logging concluído. Verifique a pasta './logs_teste'.")
-

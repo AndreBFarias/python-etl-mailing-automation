@@ -1,92 +1,88 @@
-import pandas as pd
 import logging
 from pathlib import Path
 from configparser import ConfigParser
+import pandas as pd
 from datetime import datetime
 import os
 
 logger = logging.getLogger(__name__)
 
-def _limpar_artefatos_fantasmas(output_dir: Path):
+def _exorcizar_fantasmas(diretorio: Path):
     """
-    Encontra e remove arquivos duplicados cujo nome contém caracteres de encoding quebrado, como 'ï'.
-    Esta é a versão recalibrada da "gambiarra", focada apenas nos verdadeiros fantasmas.
+    Verifica o diretório de saída em busca de arquivos com o caractere 'ï'
+    e os remove antes de iniciar a exportação.
     """
     logger.info("Iniciando ritual de limpeza de artefatos fantasmas...")
-    
-    arquivos_removidos = 0
-    
-    # Itera sobre todos os arquivos .csv no diretório de saída
-    for f_path in output_dir.glob('*.csv'):
-        # A lógica agora é simples e direta: se o nome do arquivo contém a marca do demônio,
-        # ele é um fantasma e deve ser banido.
-        if 'ï' in f_path.name:
+    try:
+        fantasmas_encontrados = [f for f in diretorio.glob('*.csv') if 'ï' in f.name]
+        if not fantasmas_encontrados:
+            logger.info("Nenhum fantasma encontrado. O reino está limpo.")
+            return
+
+        logger.warning(f"Encontrados {len(fantasmas_encontrados)} arquivos fantasmas. Iniciando exorcismo.")
+        for fantasma in fantasmas_encontrados:
             try:
-                logger.warning(f"  - Fantasma detectado: '{f_path.name}'")
-                os.remove(f_path)
-                logger.info(f"  - Fantasma '{f_path.name}' banido com sucesso.")
-                arquivos_removidos += 1
-            except Exception as e:
-                logger.error(f"Falha ao tentar banir o fantasma '{f_path.name}'. Erro: {e}")
+                os.remove(fantasma)
+                logger.info(f"Fantasma '{fantasma.name}' banido com sucesso.")
+            except OSError as e:
+                logger.error(f"Falha ao banir o fantasma '{fantasma.name}': {e}")
+    except Exception as e:
+        logger.error(f"Um erro ocorreu durante o ritual de exorcismo: {e}", exc_info=True)
 
-    if arquivos_removidos > 0:
-        logger.info(f"Ritual de limpeza concluído. {arquivos_removidos} fantasmas foram banidos.")
-    else:
-        logger.info("Nenhum artefato fantasma encontrado. O diretório está limpo.")
-
-
-def exportar_dados(df_humano: pd.DataFrame, df_robo: pd.DataFrame, config: ConfigParser):
+def exportar_dados_humanos(df_humano: pd.DataFrame, config: ConfigParser, diretorio_alvo: Path):
     """
-    Exporta os DataFrames de humano e robô para arquivos CSV e depois limpa artefatos.
+    Exporta o DataFrame de mailing humano, particionado por produto (empresa),
+    com nomes de arquivo e codificação corretos.
     """
-    logger.info("Iniciando exportação dos dados processados...")
+    logger.info("==================== INICIANDO EXPORTAÇÃO DE DADOS (HUMANO) ====================")
     
-    output_dir = Path(config.get('PATHS', 'output_dir'))
-    date_str = datetime.now().strftime(config.get('SETTINGS', 'output_date_format'))
+    _exorcizar_fantasmas(diretorio_alvo)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # --- BLOCO ANTIGO MODIFICADO PARA EXPORTAÇÃO DO MAILING HUMANO ---
-    # A assinatura da função foi alterada. O nome do parâmetro df_final foi alterado para df_humano
-    # para refletir a nova lógica.
-    
-    logger.info("--- Exportando Mailing Humano ---")
     if df_humano.empty:
-        logger.warning("DataFrame do mailing humano está vazio. Nenhum arquivo será gerado.")
-    else:
-        prefix_humano = config.get('SETTINGS', 'output_file_prefix')
-        if 'PRODUTO' not in df_humano.columns or df_humano['PRODUTO'].isnull().all():
-            logger.error("Coluna 'PRODUTO' não encontrada ou vazia no DataFrame humano. Não é possível particionar.")
-            fallback_path = output_dir / f"{prefix_humano}GERAL_{date_str}.csv"
-            df_humano.to_csv(fallback_path, sep=';', index=False, encoding='utf-8-sig')
-            logger.warning(f"Arquivo de fallback (humano) salvo em: {fallback_path}")
-        else:
-            for produto, data in df_humano.groupby('PRODUTO'):
-                produto_seguro = "".join(c for c in str(produto) if c.isalnum() or c in (' ', '_')).rstrip()
-                file_name = f"{prefix_humano}{produto_seguro}_{date_str}.csv"
-                output_path = output_dir / file_name
-                
-                logger.info(f"Exportando {len(data)} linhas (humano) para o produto '{produto}' em '{output_path}'...")
-                data.to_csv(output_path, sep=';', index=False, encoding='utf-8-sig')
-    
-    logger.info("Exportação do mailing humano concluída.")
+        logger.warning("O DataFrame (humano) para exportação está vazio. Nenhum arquivo será gerado.")
+        return
 
-    # --- NOVO BLOCO PARA EXPORTAÇÃO DO MAILING ROBÔ ---
-    logger.info("\n--- Exportando Mailing Robô ---")
-    if df_robo.empty:
-        logger.warning("DataFrame do mailing robô está vazio. Nenhum arquivo será gerado.")
-    else:
-        prefix_robo = config.get('ROBO', 'output_file_prefix', fallback='Telecobranca_TOI_Robo_')
-        file_name_robo = f"{prefix_robo}{date_str}.csv"
-        output_path_robo = output_dir / file_name_robo
+    try:
+        prefixo = config.get('SETTINGS', 'output_file_prefix', fallback='mailing_')
+        formato_data_string = config.get('SETTINGS', 'output_date_format', fallback='%%d_%%m_%%Y')
+        data_str_hoje = datetime.now().strftime(formato_data_string)
+
+        logger.info("\n--- Exportando Mailing Humano ---")
         
-        logger.info(f"Exportando {len(df_robo)} linhas (robô) para o arquivo consolidado '{output_path_robo}'...")
-        # Lógica de pivotagem será implementada em uma etapa futura. Por enquanto, exporta o consolidado.
-        df_robo.to_csv(output_path_robo, sep=';', index=False, encoding='utf-8-sig')
-        logger.info("Exportação do mailing robô concluída.")
-    # --- FIM DO NOVO BLOCO ---
+        df_export = df_humano.copy()
 
-    logger.info("\nExportação de todos os dados concluída com sucesso.")
+        # CORREÇÃO CRÍTICA: Limpa o caractere BOM (ï»¿) da coluna 'PRODUTO' ANTES de usá-la.
+        # Isso impede a criação de novos arquivos fantasmas.
+        if 'PRODUTO' in df_export.columns:
+            logger.info("Realizando limpeza final na coluna 'PRODUTO' antes de criar a lista de arquivos.")
+            df_export['PRODUTO'] = df_export['PRODUTO'].astype(str).str.replace('\ufeff', '', regex=False).str.strip()
+
+        # A lista de produtos agora é criada a partir dos dados já limpos.
+        produtos = df_export['PRODUTO'].unique()
+        for produto in produtos:
+            if pd.isna(produto) or not str(produto).strip():
+                logger.warning("Produto com nome vazio ou nulo encontrado. Pulando.")
+                continue
+
+            df_produto = df_export[df_export['PRODUTO'] == produto]
+            
+            nome_arquivo = f"{prefixo}{produto}_{data_str_hoje}.csv"
+            caminho_saida = diretorio_alvo / nome_arquivo
+            
+            logger.info(f"Exportando {len(df_produto)} linhas (humano) para o produto '{produto}' em '{caminho_saida}'...")
+            
+            df_produto.to_csv(
+                caminho_saida,
+                index=False,
+                sep=';',
+                encoding='utf-8' # O formatador cuidará do utf-8-sig depois
+            )
+            
+        logger.info("Exportação do mailing humano concluída.")
+
+    except Exception as e:
+        logger.error(f"Ocorreu um erro catastrófico durante a exportação (humano): {e}", exc_info=True)
+        raise
     
-    # Chama a limpeza ao final de tudo.
-    _limpar_artefatos_fantasmas(output_dir)
+    finally:
+        logger.info("==================== EXPORTAÇÃO DE DADOS (HUMANO) CONCLUÍDA ====================")
