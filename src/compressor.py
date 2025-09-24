@@ -3,126 +3,132 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import os
-import glob
+import logging
 from configparser import ConfigParser
+import pandas as pd
+import numpy as np
 
-# def organize_and_compress_output(config: ConfigParser):
-#     # HOMOLOGAÇÃO: A lógica antiga era falha. Ela tentava encontrar os arquivos na pasta
-#     # raiz do output e movê-los para a pasta datada. Isso falhava porque os padrões
-#     # de busca não correspondiam e criava uma condição de corrida com o formatador.
-#     """
-#     Organiza os arquivos de saída do dia em uma pasta datada,
-#     copia o log correspondente e comprime tudo em um arquivo .zip.
-#     """
-#     print("\n--- INICIANDO ROTINA DE ORGANIZAÇÃO E COMPRESSÃO ---")
-#     
-#     today = datetime.now()
-#     date_str_files = today.strftime('%d_%m_%Y')
-#     date_str_log = today.strftime('%Y-%m-%d')
-#     date_str_zip = today.strftime('%d-%m-%Y')
-# 
-#     output_dir = Path(config.get('PATHS', 'output_dir', fallback='data_output'))
-#     log_dir = Path(config.get('PATHS', 'log_dir', fallback='logs'))
-# 
-#     dated_folder = output_dir / date_str_files
-#     try:
-#         dated_folder.mkdir(exist_ok=True)
-#         print(f"INFO: Pasta do dia criada em: '{dated_folder}'")
-#     except OSError as e:
-#         print(f"ERRO: Não foi possível criar a pasta '{dated_folder}'. Erro: {e}")
-#         return
-# 
-#     humano_prefix = config.get('EXPORT_FILENAMES', 'humano_prefix', fallback='mailing_humano')
-#     robo_prefix = config.get('EXPORT_FILENAMES', 'robo_prefix', fallback='mailing_robo')
-#     date_format = config.get('EXPORT_FILENAMES', 'date_format', fallback='%d_%m_%Y')
-#     date_str_for_files = today.strftime(date_format)
-# 
-#     patterns = [
-#         f"{humano_prefix}*_{date_str_for_files}.csv",
-#         f"{robo_prefix}*_{date_str_for_files}.csv"
-#     ]
-#     
-#     files_to_move = []
-#     for pattern in patterns:
-#         files_to_move.extend(output_dir.glob(pattern))
-#     
-#     if not files_to_move:
-#         print("AVISO: Nenhum arquivo CSV encontrado para a data de hoje. Nenhum arquivo foi movido.")
-#     else:
-#         print(f"INFO: Movendo {len(files_to_move)} arquivos CSV para a pasta do dia...")
-#         for f in files_to_move:
-#             try:
-#                 shutil.move(str(f), str(dated_folder / f.name))
-#             except Exception as e:
-#                 print(f"ERRO: Falha ao mover o arquivo '{f.name}'. Erro: {e}")
-#         print("INFO: Arquivos CSV movidos com sucesso.")
-# 
-#     log_file_name = f"automacao_{date_str_log}.log"
-#     log_file_source = log_dir / log_file_name
-#     
-#     if log_file_source.is_file():
-#         try:
-#             shutil.copy2(str(log_file_source), str(dated_folder / log_file_name))
-#             print(f"INFO: Log do dia '{log_file_name}' copiado para a pasta.")
-#         except Exception as e:
-#             print(f"ERRO: Falha ao copiar o arquivo de log. Erro: {e}")
-#     else:
-#         print(f"AVISO: Arquivo de log '{log_file_name}' não encontrado na pasta de logs.")
-# 
-#     zip_filename_base = output_dir / f"mailing-{date_str_zip}"
-#     try:
-#         shutil.make_archive(
-#             base_name=str(zip_filename_base),
-#             format='zip',
-#             root_dir=str(dated_folder)
-#         )
-#         print(f"INFO: Pasta do dia comprimida com sucesso em '{zip_filename_base}.zip'")
-#     except Exception as e:
-#         print(f"ERRO: Falha ao compactar a pasta. Erro: {e}")
+logger = logging.getLogger(__name__)
+
+def _exorcizar_arquivos_fantasmas(diretorio_alvo: Path):
+    logger.info("Iniciando ritual de exorcismo de arquivos fantasmas (BOM)...")
+    fantasmas_encontrados = [f for f in diretorio_alvo.glob('*.csv') if 'ï»¿' in f.name]
+    if not fantasmas_encontrados:
+        logger.info("Nenhum fantasma (BOM) encontrado nos nomes dos arquivos.")
+        return
+    for fantasma in fantasmas_encontrados:
+        try:
+            os.remove(fantasma)
+            logger.warning(f"FANTASMA BANIDO: O arquivo '{fantasma.name}' foi removido.")
+        except OSError as e:
+            logger.error(f"Falha ao banir o fantasma '{fantasma.name}': {e}")
+
+
+def _deduplicar_arquivos_finais(diretorio: Path):
+    logger.info("--- Iniciando purga final de duplicatas nos arquivos de saída ---")
+    for file_path in diretorio.glob('*.csv'):
+        try:
+            sep = '|' if 'Robo' in file_path.name else ';'
+            df = pd.read_csv(file_path, sep=sep, dtype=str, encoding='utf-8-sig')
+            chave_deduplicacao = 'CPF'
+            if chave_deduplicacao in df.columns and df.duplicated(subset=[chave_deduplicacao]).any():
+                tamanho_inicial = len(df)
+                df['completude'] = df.notna().sum(axis=1)
+                df.sort_values(by=[chave_deduplicacao, 'completude'], ascending=[True, False], inplace=True)
+                df.drop_duplicates(subset=[chave_deduplicacao], keep='last', inplace=True)
+                df.drop(columns=['completude'], inplace=True)
+                df.to_csv(file_path, sep=sep, index=False, encoding='utf-8-sig', na_rep='')
+                removidos = tamanho_inicial - len(df)
+                logger.warning(f"  -> {removidos} duplicatas removidas de '{file_path.name}'.")
+        except Exception as e:
+            logger.error(f"Falha ao deduplicar o arquivo '{file_path.name}': {e}")
+
+
+def _substituir_nan_por_nulo(diretorio_alvo: Path):
+    logger.info("--- Iniciando substituição final de 'nan' por nulo ---")
+    for file_path in diretorio_alvo.glob('*.csv'):
+        try:
+            sep = '|' if 'Robo' in file_path.name else ';'
+            df = pd.read_csv(file_path, sep=sep, dtype=str, encoding='utf-8-sig', keep_default_na=False)
+            df.replace(['nan', 'NaT', 'None', 'NAN'], '', inplace=True)
+            df.to_csv(file_path, sep=sep, index=False, encoding='utf-8-sig', na_rep='')
+        except Exception as e:
+            logger.error(f"Falha ao substituir 'nan' no arquivo '{file_path.name}': {e}")
+
+
+def _corrigir_encoding_faixa(diretorio_alvo: Path):
+    logger.info("--- Iniciando correção de encoding na coluna 'faixa' ---")
+    for file_path in diretorio_alvo.glob('*.csv'):
+        try:
+            sep = '|' if 'Robo' in file_path.name else ';'
+            df = pd.read_csv(file_path, sep=sep, dtype=str, encoding='utf-8-sig')
+            if 'faixa' in df.columns:
+                df['faixa'] = df['faixa'].str.replace('AtÃ©', 'Até', regex=False)
+                df.to_csv(file_path, sep=sep, index=False, encoding='utf-8-sig', na_rep='')
+        except Exception as e:
+            logger.error(f"Falha ao corrigir encoding da 'faixa' em '{file_path.name}': {e}")
+            
+# 1. NOVA FUNCAO PARA CORRECAO GERAL DE ENCODING
+def _corrigir_encoding_nao(diretorio_alvo: Path):
+    """
+    Corrige o erro de encoding 'NÃƒO' para 'NÃO' em colunas predefinidas.
+    """
+    logger.info("--- Iniciando correção de encoding para 'NÃO' ---")
+    colunas_alvo = ['reav', 'corte_toi', 'cortepen', 'iu12m', 'Cliente_Regulariza']
+    
+    for file_path in diretorio_alvo.glob('*.csv'):
+        try:
+            sep = '|' if 'Robo' in file_path.name else ';'
+            df = pd.read_csv(file_path, sep=sep, dtype=str, encoding='utf-8-sig')
+            
+            for coluna in colunas_alvo:
+                if coluna in df.columns:
+                    df[coluna] = df[coluna].str.replace('NÃƒO', 'NÃO', regex=False)
+            
+            df.to_csv(file_path, sep=sep, index=False, encoding='utf-8-sig', na_rep='')
+        except Exception as e:
+            logger.error(f"Falha ao corrigir encoding de 'NÃO' no arquivo '{file_path.name}': {e}")
+
 
 def organize_and_compress_output(config: ConfigParser):
-    """
-    NOVA LÓGICA: Localiza a pasta do dia (que já deve conter todos os arquivos),
-    copia o log para dentro dela e, em seguida, compacta a pasta inteira.
-    """
-    print("\n--- INICIANDO ROTINA DE ORGANIZAÇÃO E COMPRESSÃO ---")
+    logger.info("--- INICIANDO ROTINA DE ORGANIZAÇÃO E COMPRESSÃO ---")
     
-    today = datetime.now()
-    date_str_folder = today.strftime('%d_%m_%Y')
-    date_str_log = today.strftime('%Y-%m-%d')
-    date_str_zip = today.strftime('%d-%m-%Y')
+    output_dir = Path(config.get('PATHS', 'output_dir'))
+    log_dir = Path(config.get('PATHS', 'log_dir'))
+    
+    date_format_str = config.get('SETTINGS', 'output_date_format').replace('%%', '%')
+    pasta_do_dia = output_dir / datetime.now().strftime(date_format_str)
 
-    output_dir = Path(config.get('PATHS', 'output_dir', fallback='data_output'))
-    log_dir = Path(config.get('PATHS', 'log_dir', fallback='logs'))
-
-    # Passo 1: Localizar a pasta do dia. Os arquivos já devem estar lá.
-    dated_folder = output_dir / date_str_folder
-    if not dated_folder.is_dir():
-        print(f"ERRO CRÍTICO: A pasta do dia '{dated_folder}' não foi encontrada. A compressão não pode continuar.")
+    if not pasta_do_dia.is_dir():
+        logger.error(f"Pasta do dia '{pasta_do_dia}' não encontrada. Abortando.")
         return
 
-    # Passo 2: Copiar o arquivo de log para dentro da pasta do dia.
-    log_file_name = f"automacao_{date_str_log}.log"
-    log_file_source = log_dir / log_file_name
+    log_file_name = f"automacao_{datetime.now().strftime('%Y-%m-%d')}.log"
+    log_file_path = log_dir / log_file_name
+    if log_file_path.exists():
+        shutil.copy(log_file_path, pasta_do_dia / log_file_name)
     
-    if log_file_source.is_file():
-        try:
-            shutil.copy2(str(log_file_source), str(dated_folder / log_file_name))
-            print(f"INFO: Log do dia '{log_file_name}' copiado para a pasta de arquivamento.")
-        except Exception as e:
-            print(f"ERRO: Falha ao copiar o arquivo de log. Erro: {e}")
-    else:
-        print(f"AVISO: Arquivo de log '{log_file_name}' não encontrado na pasta de logs.")
+    _exorcizar_arquivos_fantasmas(pasta_do_dia)
+    _deduplicar_arquivos_finais(pasta_do_dia)
+    _substituir_nan_por_nulo(pasta_do_dia)
+    _corrigir_encoding_faixa(pasta_do_dia)
+    # 2. Adiciona a nova etapa de correcao de encoding
+    _corrigir_encoding_nao(pasta_do_dia)
 
-    # Passo 3: Compactar a pasta do dia.
-    # O nome do arquivo zip será salvo na pasta de output principal.
-    zip_filename_base = output_dir / f"mailing-{date_str_zip}"
+    archive_name_prefix = config.get('COMPRESSOR', 'archive_name_prefix', fallback='mailing_')
+    zip_name = f"{archive_name_prefix}{datetime.now().strftime('%d-%m-%Y')}.zip"
+    zip_path = output_dir / zip_name
+
     try:
-        shutil.make_archive(
-            base_name=str(zip_filename_base),
-            format='zip',
-            root_dir=str(dated_folder) # O conteúdo desta pasta será o conteúdo do zip.
-        )
-        print(f"INFO: Pasta do dia comprimida com sucesso em '{zip_filename_base}.zip'")
+        shutil.make_archive(str(zip_path.with_suffix('')), 'zip', str(pasta_do_dia))
+        logger.info(f"Pasta do dia comprimida com sucesso em '{zip_path}'")
     except Exception as e:
-        print(f"ERRO: Falha ao compactar a pasta. Erro: {e}")
+        logger.error(f"Falha ao compactar a pasta: {e}")
+        return
+
+    try:
+        shutil.rmtree(pasta_do_dia)
+        logger.info(f"Pasta de trabalho original '{pasta_do_dia}' removida com sucesso.")
+    except OSError as e:
+        logger.error(f"Falha ao remover a pasta de trabalho '{pasta_do_dia}': {e}")
+

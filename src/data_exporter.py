@@ -1,88 +1,78 @@
+# -*- coding: utf-8 -*-
+import pandas as pd
 import logging
 from pathlib import Path
 from configparser import ConfigParser
-import pandas as pd
 from datetime import datetime
-import os
 
 logger = logging.getLogger(__name__)
 
-def _exorcizar_fantasmas(diretorio: Path):
-    """
-    Verifica o diretório de saída em busca de arquivos com o caractere 'ï'
-    e os remove antes de iniciar a exportação.
-    """
-    logger.info("Iniciando ritual de limpeza de artefatos fantasmas...")
+def _formatar_valor_para_duas_casas(valor) -> str:
+    if pd.isna(valor): return ''
     try:
-        fantasmas_encontrados = [f for f in diretorio.glob('*.csv') if 'ï' in f.name]
-        if not fantasmas_encontrados:
-            logger.info("Nenhum fantasma encontrado. O reino está limpo.")
-            return
-
-        logger.warning(f"Encontrados {len(fantasmas_encontrados)} arquivos fantasmas. Iniciando exorcismo.")
-        for fantasma in fantasmas_encontrados:
-            try:
-                os.remove(fantasma)
-                logger.info(f"Fantasma '{fantasma.name}' banido com sucesso.")
-            except OSError as e:
-                logger.error(f"Falha ao banir o fantasma '{fantasma.name}': {e}")
-    except Exception as e:
-        logger.error(f"Um erro ocorreu durante o ritual de exorcismo: {e}", exc_info=True)
+        valor_float = float(valor)
+        return f'{valor_float:.2f}'.replace('.', ',')
+    except (ValueError, TypeError):
+        return str(valor)
 
 def exportar_dados_humanos(df_humano: pd.DataFrame, config: ConfigParser, diretorio_alvo: Path):
     """
-    Exporta o DataFrame de mailing humano, particionado por produto (empresa),
-    com nomes de arquivo e codificação corretos.
+    Função refatorada para a arquitetura de fluxo único.
+    Exporta o mailing humano, particionando por 'PRODUTO' e selecionando colunas específicas.
     """
-    logger.info("==================== INICIANDO EXPORTAÇÃO DE DADOS (HUMANO) ====================")
+    logger.info("="*20 + " INICIANDO EXPORTAÇÃO DE DADOS HUMANOS (FLUXO ÚNICO) " + "="*20)
     
-    _exorcizar_fantasmas(diretorio_alvo)
-
     if df_humano.empty:
-        logger.warning("O DataFrame (humano) para exportação está vazio. Nenhum arquivo será gerado.")
+        logger.warning("DataFrame 'Humano' está vazio. Nenhuma exportação será realizada.")
         return
 
+    formato_data_string = config.get('SETTINGS', 'output_date_format').replace('%%', '%')
+    data_str_hoje = datetime.now().strftime(formato_data_string)
+    
+    colunas_data = ['dtvenc', 'dtreav', 'dtprot', 'dt_deslig', 'dtapr', 'data_encer_cont', 'min_datavcm', 'dt_aplicação']
+    colunas_financeiras = ['liquido', 'total_toi', 'valor', 'valorDivida']
+    
+    df_export = df_humano.copy()
+
+    # Aplica formatações
+    for coluna in colunas_financeiras:
+        if coluna in df_export.columns:
+            df_export[coluna] = df_export[coluna].apply(_formatar_valor_para_duas_casas)
+    for coluna_data in colunas_data:
+        if coluna_data in df_export.columns:
+            df_export[coluna_data] = pd.to_datetime(df_export[coluna_data], errors='coerce').dt.strftime('%d/%m/%Y')
+    
+    # 1
+    # --- LÓGICA DE FILTRAGEM DE COLUNAS (NOVA) ---
+    # 2
     try:
-        prefixo = config.get('SETTINGS', 'output_file_prefix', fallback='mailing_')
-        formato_data_string = config.get('SETTINGS', 'output_date_format', fallback='%%d_%%m_%%Y')
-        data_str_hoje = datetime.now().strftime(formato_data_string)
-
-        logger.info("\n--- Exportando Mailing Humano ---")
+        colunas_human_str = config.get('EXPORT_COLUMNS', 'human_columns')
+        colunas_finais_exportacao = [col.strip() for col in colunas_human_str.replace('\n', ',').split(',') if col.strip()]
         
-        df_export = df_humano.copy()
+        # 3
+        colunas_presentes = [col for col in colunas_finais_exportacao if col in df_export.columns]
+        df_export_final = df_export[colunas_presentes]
+        logger.info(f"Aplicando filtro de exportação. {len(colunas_presentes)} colunas serão salvas nos arquivos humanos.")
+    # 5
+    except Exception as e:
+        logger.warning(f"Não foi possível ler a configuração de colunas de exportação para arquivos humanos: {e}. Exportando todas as colunas.")
+        df_export_final = df_export
 
-        # CORREÇÃO CRÍTICA: Limpa o caractere BOM (ï»¿) da coluna 'PRODUTO' ANTES de usá-la.
-        # Isso impede a criação de novos arquivos fantasmas.
-        if 'PRODUTO' in df_export.columns:
-            logger.info("Realizando limpeza final na coluna 'PRODUTO' antes de criar a lista de arquivos.")
-            df_export['PRODUTO'] = df_export['PRODUTO'].astype(str).str.replace('\ufeff', '', regex=False).str.strip()
-
-        # A lista de produtos agora é criada a partir dos dados já limpos.
-        produtos = df_export['PRODUTO'].unique()
-        for produto in produtos:
-            if pd.isna(produto) or not str(produto).strip():
-                logger.warning("Produto com nome vazio ou nulo encontrado. Pulando.")
-                continue
-
-            df_produto = df_export[df_export['PRODUTO'] == produto]
+    # 4
+    # Exporta particionado por produto
+    prefixo = config.get('SETTINGS', 'output_file_prefix', fallback='Telecobranca_TOI_')
+    if 'PRODUTO' in df_export_final.columns:
+        df_export_final['PRODUTO'] = df_export_final['PRODUTO'].astype(str).str.strip()
+        for produto in df_export_final['PRODUTO'].unique():
+            if pd.isna(produto) or not str(produto).strip(): continue
             
-            nome_arquivo = f"{prefixo}{produto}_{data_str_hoje}.csv"
+            df_produto = df_export_final[df_export_final['PRODUTO'] == produto]
+            nome_arquivo = f"{prefixo}mailing_{produto}_{data_str_hoje}.csv"
             caminho_saida = diretorio_alvo / nome_arquivo
             
-            logger.info(f"Exportando {len(df_produto)} linhas (humano) para o produto '{produto}' em '{caminho_saida}'...")
-            
-            df_produto.to_csv(
-                caminho_saida,
-                index=False,
-                sep=';',
-                encoding='utf-8' # O formatador cuidará do utf-8-sig depois
-            )
-            
-        logger.info("Exportação do mailing humano concluída.")
+            logger.info(f"Exportando {len(df_produto)} linhas para '{caminho_saida}'")
+            df_produto.to_csv(caminho_saida, index=False, sep=';', encoding='utf-8-sig', na_rep='')
+    else:
+        logger.error("Coluna 'PRODUTO' não encontrada. Não é possível particionar a exportação.")
 
-    except Exception as e:
-        logger.error(f"Ocorreu um erro catastrófico durante a exportação (humano): {e}", exc_info=True)
-        raise
-    
-    finally:
-        logger.info("==================== EXPORTAÇÃO DE DADOS (HUMANO) CONCLUÍDA ====================")
+    logger.info("="*20 + " EXPORTAÇÃO DE DADOS HUMANOS CONCLUÍDA " + "="*20)

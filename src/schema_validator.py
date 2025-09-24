@@ -1,96 +1,59 @@
-#1
+# -*- coding: utf-8 -*-
 import pandas as pd
-import json
-from pathlib import Path
-from datetime import datetime
-import logging
 from configparser import ConfigParser
+import logging
+from typing import List
 
 logger = logging.getLogger(__name__)
 
-#2
-def get_current_schema(input_dir: Path) -> dict:
-    """Escaneia o diretório de entrada e gera um dicionário com a estrutura atual dos arquivos."""
-    schema = {'files': {}}
-    if not input_dir.is_dir():
-        logger.error(f"Diretório de entrada '{input_dir}' não encontrado.")
-        return schema
-        
-    files = [f for f in input_dir.iterdir() if f.is_file() and not f.name.startswith('.')]
+# 1
+"""
+# --- LÓGICA ANTIGA (PRESERVADA PARA HOMOLOGAÇÃO) ---
+def get_required_columns(config: ConfigParser, schema_key: str) -> List[str]:
+    \"\"\"Lê e parseia as colunas requeridas de uma seção do config.ini.\"\"\"
+    columns_str = config.get(schema_key, 'required_columns', fallback='')
+    # Esta lógica falhava ao não remover as vírgulas no final de cada linha.
+    return [col.strip().lower() for col in columns_str.split('\\n') if col.strip()]
+"""
+
+# 2
+# --- NOVA LÓGICA DE PARSING ROBUSTA ---
+def get_required_columns(config: ConfigParser, schema_key: str) -> List[str]:
+    """Lê e parseia as colunas requeridas de uma seção do config.ini, lidando com vírgulas e quebras de linha."""
+    columns_str = config.get(schema_key, 'required_columns', fallback='')
+    # Substitui quebras de linha por vírgulas e depois divide pela vírgula
+    cleaned_str = columns_str.replace('\n', ',')
+    return [col.strip().lower() for col in cleaned_str.split(',') if col.strip()]
+
+# 3
+def validate_schema(df: pd.DataFrame, config: ConfigParser, schema_key: str, filename: str):
+    """
+    Valida o schema de um DataFrame contra as colunas requeridas no config.ini.
+    """
+    logger.info(f"Iniciando validação de schema para o arquivo: {filename}")
     
-    for f in sorted(files, key=lambda p: p.name):
-        file_info = {}
-        if f.suffix.lower() in ['.xlsx', '.xls']:
-            try:
-                xls = pd.ExcelFile(f)
-                file_info['sheets'] = {name: xls.parse(name, nrows=0).columns.to_list() for name in xls.sheet_names}
-            except Exception as e:
-                file_info['error'] = f"Não foi possível ler o arquivo Excel: {e}"
-        elif f.suffix.lower() == '.csv':
-            try:
-                file_info['columns'] = pd.read_csv(f, nrows=0).columns.to_list()
-            except Exception as e:
-                file_info['error'] = f"Não foi possível ler o arquivo CSV: {e}"
-        
-        schema['files'][f.name] = file_info
-    return schema
-
-def save_snapshot(schema: dict, snapshot_path: Path):
-    """Salva a estrutura de dados atual como o novo 'estado bom conhecido'."""
-    schema['timestamp'] = datetime.now().isoformat()
-    try:
-        with open(snapshot_path, 'w', encoding='utf-8') as f:
-            json.dump(schema, f, indent=4, ensure_ascii=False)
-        logger.info(f"Snapshot da estrutura de dados salvo com sucesso em '{snapshot_path}'.")
-    except Exception as e:
-        logger.error(f"Falha ao salvar o snapshot em '{snapshot_path}': {e}")
-
-def compare_and_report(snapshot_path: Path, input_dir: Path, report_path: Path):
-    """Compara a estrutura atual com o snapshot e gera um laudo detalhado."""
-    if not snapshot_path.exists():
-        logger.error("Nenhum snapshot de estrutura de dados encontrado. Não é possível gerar laudo.")
+    required_columns = get_required_columns(config, schema_key)
+    if not required_columns:
+        logger.warning(f"Nenhuma coluna requerida definida para '{schema_key}' no config.ini. Validação pulada.")
         return
 
-    with open(snapshot_path, 'r', encoding='utf-8') as f:
-        snapshot = json.load(f)
+    df_columns = {col.lower() for col in df.columns}
     
-    current_schema = get_current_schema(input_dir)
+    missing_columns = [col for col in required_columns if col not in df_columns]
+    if missing_columns:
+        error_msg = f"SCHEMA INVALIDO em '{filename}': Colunas obrigatórias não encontradas: {', '.join(missing_columns)}."
+        logger.critical(error_msg)
+        raise SchemaValidationError(error_msg)
+
+    extra_columns = list(df_columns - set(required_columns))
+    if extra_columns:
+        logger.warning(
+            f"ALERTA DE SCHEMA EM '{filename}': Novas colunas não esperadas foram encontradas e "
+            f"serão mantidas: {extra_columns}. Considere adicioná-las ao 'config.ini' se forem permanentes."
+        )
     
-    report_lines = [
-        "==================================================",
-        "  LAUDO DE ALTERAÇÕES NA ESTRUTURA DE DADOS",
-        f"  Data da Análise: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"  Estrutura Esperada (Snapshot de {snapshot.get('timestamp', 'data desconhecida')}):",
-        "==================================================", ""
-    ]
-    
-    # Lógica de comparação (mantida como no original)
-    # ... (a lógica interna de comparação de arquivos, abas e colunas permanece a mesma) ...
+    logger.info(f"Validação de schema para '{filename}' concluída com sucesso.")
 
-    report_content = "\n".join(report_lines)
-    with open(report_path, 'w', encoding='utf-8') as f:
-        f.write(report_content)
-
-#3
-def generate_schema_snapshot(config: ConfigParser, force_laudo: bool = False):
-    """
-    Função orquestradora que cria um snapshot inicial ou compara com um existente.
-    """
-    #3.1
-    input_dir = Path(config.get('PATHS', 'input_dir', fallback='./data_input'))
-    snapshot_path = Path(config.get('PATHS', 'state_dir', fallback='.')).joinpath('schema_snapshot.json')
-    report_path = Path('./LAUDO_DE_ALTERACOES.txt')
-
-    #3.2
-    if force_laudo:
-        logger.info("Forçando a geração do laudo de alterações.")
-        compare_and_report(snapshot_path, input_dir, report_path)
-        return
-
-    if not snapshot_path.exists():
-        logger.info("Nenhum snapshot encontrado. Criando o primeiro a partir da estrutura atual...")
-        current_schema = get_current_schema(input_dir)
-        save_snapshot(current_schema, snapshot_path)
-    else:
-        logger.info("Snapshot encontrado. Executando comparação para detectar mudanças...")
-        compare_and_report(snapshot_path, input_dir, report_path)
+class SchemaValidationError(Exception):
+    """Exceção customizada para erros de validação de schema."""
+    pass
