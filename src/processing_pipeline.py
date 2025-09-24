@@ -6,7 +6,7 @@ from tqdm import tqdm
 from configparser import ConfigParser
 from datetime import datetime
 import re
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List
 
 logger = logging.getLogger(__name__)
 tqdm.pandas(desc="Processando mailing")
@@ -33,7 +33,7 @@ def _tratar_datas(df: pd.DataFrame) -> tuple:
     colunas_data = ['dtvenc', 'dtreav', 'dtprot', 'dt_deslig', 'dtapr', 'data_encer_cont', 'min_datavcm', 'dt_aplicação']
     for coluna in colunas_data:
         if coluna in df.columns:
-            df[coluna] = pd.to_datetime(df[coluna], errors='coerce')
+            df[coluna] = pd.to_datetime(df[coluna], errors='coerce', dayfirst=True)
     return df, "Tratamento de colunas de data concluído."
 
 def _tratar_colunas_rebeldes(df: pd.DataFrame) -> tuple:
@@ -114,42 +114,7 @@ def _calcular_colunas_agregadas(df: pd.DataFrame, config: ConfigParser) -> tuple
         
     return df, "Colunas agregadas (valorDivida, etc.) calculadas."
 
-# 1
 def _enriquecer_telefones(df_mailing: pd.DataFrame, dataframes: dict) -> tuple:
-    """
-    # --- LÓGICA ATUAL (PRESERVADA PARA HOMOLOGAÇÃO) ---
-    for i in range(1, 5): df_mailing[f'telefone_0{i}'] = np.nan
-    if 'enriquecimento' not in dataframes or not isinstance(dataframes['enriquecimento'], dict):
-        return df_mailing, "Enriquecimento: Dados não encontrados. Etapa pulada."
-    df_enriquecimento_dict = dataframes.get('enriquecimento', {})
-    df_pontuacao = pd.concat(df_enriquecimento_dict.values(), ignore_index=True) if df_enriquecimento_dict else pd.DataFrame()
-    colunas_pontuacao_necessarias = ['documento', 'telefone', 'pontuacao']
-    if df_pontuacao.empty or not all(col in df_pontuacao.columns for col in colunas_pontuacao_necessarias):
-        return df_mailing, "Enriquecimento: Abas de pontuação válidas não encontradas. Etapa pulada."
-    df_pontuacao = df_pontuacao[colunas_pontuacao_necessarias].dropna(subset=['documento', 'telefone'])
-    df_pontuacao['join_key'] = df_pontuacao['documento'].astype(str).str.lower().str.strip()
-    df_pontuacao['telefone'] = df_pontuacao['telefone'].apply(_clean_phone_number)
-    df_pontuacao.dropna(subset=['join_key', 'telefone'], inplace=True)
-    df_pontuacao = df_pontuacao.sort_values(by=['join_key', 'pontuacao'], ascending=[True, False])
-    telefones_agrupados = df_pontuacao.groupby('join_key')['telefone'].apply(list).reset_index()
-    telefones_agrupados.rename(columns={'telefone': 'telefones_enriquecidos'}, inplace=True)
-    if 'ndoc' not in df_mailing.columns:
-        return df_mailing, "Enriquecimento: ERRO - Coluna 'ndoc' não encontrada."
-    df_mailing['join_key'] = df_mailing['ndoc'].astype(str).str.lower().str.strip()
-    df_final = pd.merge(df_mailing, telefones_agrupados, on='join_key', how='left')
-    matches = df_final['telefones_enriquecidos'].notna().sum()
-    def popular_telefones(row):
-        telefones = list(dict.fromkeys(
-            (row['telefones_enriquecidos'] if isinstance(row['telefones_enriquecidos'], list) else []) +
-            [_clean_phone_number(p) for p in [row.get('ind_telefone_1_valido'), row.get('ind_telefone_2_valido'), row.get('fone_consumidor')] if pd.notna(p) and p]
-        ))
-        for i in range(4): row[f'telefone_0{i+1}'] = telefones[i] if i < len(telefones) else np.nan
-        return row
-    df_final = df_final.progress_apply(popular_telefones, axis=1)
-    df_final = df_final.drop(columns=['join_key', 'telefones_enriquecidos'], errors='ignore')
-    return df_final, f"Enriquecimento de Telefones: {matches} clientes tiveram telefones encontrados."
-    """
-    # --- NOVA LÓGICA (RESTAURADA DA VERSÃO ESTÁVEL) ---
     logger.info("Iniciando enriquecimento de telefones.")
     
     for i in range(1, 5):
@@ -219,10 +184,13 @@ def _remover_por_status_de_bloqueio(df: pd.DataFrame, config: ConfigParser) -> t
     coluna_filtro = config.get('SOURCE_COLUMNS', 'bloqueio').lower()
     if coluna_filtro not in df.columns:
         return df, f"Filtro de Bloqueio: Coluna '{coluna_filtro}' não encontrada. Etapa pulada."
+    
     status_para_remover_str = config.get('SCHEMA_MAILING', 'status_de_bloqueio_para_remover', fallback='')
     status_para_remover = [s.strip().lower() for s in status_para_remover_str.split('\n') if s.strip()]
+    
     if not status_para_remover:
         return df, "Filtro de Bloqueio: Nenhum status de bloqueio para remover definido. Etapa pulada."
+
     tamanho_inicial = len(df)
     df_filtrado = df[~df[coluna_filtro].astype(str).str.strip().str.lower().isin(status_para_remover)]
     removidos = tamanho_inicial - len(df_filtrado)
@@ -237,9 +205,18 @@ def _aplicar_ajustes_finais(df: pd.DataFrame, config: ConfigParser) -> tuple:
         'telefone_03': 'TELEFONE_03', 'telefone_04': 'TELEFONE_04'
     }
     df.rename(columns=mapa_renomeacao, inplace=True)
-    colunas_principais = ['NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtrado', 'Quantidade_UC_por_CPF', 'Ucs_do_CPF', 'LOCALIDADE', 'valorDivida', 'Cliente_Regulariza', 'TELEFONE_01', 'TELEFONE_02', 'TELEFONE_03', 'TELEFONE_04', 'Data_de_Importacao']
+    
+    colunas_principais = [
+        'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtrado', 'Quantidade_UC_por_CPF', 
+        'Ucs_do_CPF', 'LOCALIDADE', 'valorDivida', 'Cliente_Regulariza', 'TELEFONE_01', 
+        'TELEFONE_02', 'TELEFONE_03', 'TELEFONE_04', 'Quantidades_de_Acionamentos', 
+        'Data_de_Importacao'
+    ]
+    
     for col in colunas_principais:
-        if col not in df.columns: df[col] = ''
+        if col not in df.columns: 
+            df[col] = ''
+            
     outras_colunas = [col for col in df.columns if col not in colunas_principais]
     df = df[colunas_principais + outras_colunas]
     return df, "Ajustes finais de layout aplicados."
@@ -279,33 +256,64 @@ def _aplicar_filtros_estrategicos(df: pd.DataFrame, config: ConfigParser) -> Tup
     return df_humano, df_robo
 
 # --- FUNCAO ORQUESTRADORA (ARQUITETURA UNIFICADA E ROBUSTA) ---
-def processar_dados(dataframes: Dict, config: ConfigParser) -> Tuple[pd.DataFrame, pd.DataFrame]:
+# 1. AJUSTE: A função agora retorna também a lista de relatórios.
+def processar_dados(dataframes: Dict, config: ConfigParser) -> Tuple[Tuple[pd.DataFrame, pd.DataFrame], List[Dict]]:
+    # 2. AJUSTE: Cria a lista para coletar os relatórios.
+    process_report = []
+    
     df_mailing = dataframes.get('mailing', pd.DataFrame())
     if df_mailing.empty:
         logger.warning("Mailing de entrada vazio. Nenhum dado para processar.")
-        return pd.DataFrame(), pd.DataFrame()
+        return (pd.DataFrame(), pd.DataFrame()), process_report
 
     logger.info("="*25 + " INICIANDO PROCESSAMENTO DE FLUXO ÚNICO " + "="*25)
     logger.info(f"Registros iniciais no mailing consolidado: {len(df_mailing)}")
     
     df_processado = df_mailing.copy()
     
-    df_limpo, msg = _tratar_datas(df_processado); logger.info(msg)
-    df_limpo, msg = _tratar_colunas_rebeldes(df_limpo); logger.info(msg)
-    df_limpo, msg = _remover_clientes_proibidos(df_limpo, dataframes.get('regras_disposicao'), config); logger.info(msg)
-    df_limpo, msg = _remover_duplicatas_inteligentemente(df_limpo, config); logger.info(msg)
-    df_limpo, msg = _calcular_colunas_agregadas(df_limpo, config); logger.info(msg)
+    # 3. AJUSTE: Coleta de métricas após cada etapa de forma explícita.
+    df_limpo, msg = _tratar_datas(df_processado)
+    df_limpo, msg = _tratar_colunas_rebeldes(df_limpo)
     
-    # 2
-    # --- LÓGICA ANTIGA (PRESERVADA PARA HOMOLOGAÇÃO) ---
-    # df_limpo, msg = _enriquecer_telefones(df_limpo, dataframes, config); logger.info(msg)
-    # --- NOVA LÓGICA (CHAMADA CORRIGIDA) ---
-    df_limpo, msg = _enriquecer_telefones(df_limpo, dataframes); logger.info(msg)
+    initial_count = len(df_limpo)
+    df_limpo, msg = _remover_clientes_proibidos(df_limpo, dataframes.get('regras_disposicao'), config)
+    logger.info(msg)
+    final_count = len(df_limpo)
+    process_report.append({"name": "Remoção por Tabulação", "initial": initial_count, "removed": initial_count - final_count, "final": final_count, "message": msg})
+
+    initial_count = len(df_limpo)
+    df_limpo, msg = _remover_duplicatas_inteligentemente(df_limpo, config)
+    logger.info(msg)
+    final_count = len(df_limpo)
+    process_report.append({"name": "Deduplicação por 'ncpf'", "initial": initial_count, "removed": initial_count - final_count, "final": final_count, "message": msg})
+
+    initial_count = len(df_limpo)
+    df_limpo, msg = _calcular_colunas_agregadas(df_limpo, config)
+    logger.info(msg)
+    final_count = len(df_limpo)
+    process_report.append({"name": "Cálculo de Colunas Agregadas", "initial": initial_count, "removed": initial_count - final_count, "final": final_count, "message": msg})
+
+    initial_count = len(df_limpo)
+    df_limpo, msg = _enriquecer_telefones(df_limpo, dataframes)
+    logger.info(msg)
+    final_count = len(df_limpo)
+    process_report.append({"name": "Enriquecimento de Telefones", "initial": initial_count, "removed": initial_count - final_count, "final": final_count, "message": msg})
+
+    initial_count = len(df_limpo)
+    df_limpo, msg = _criar_cliente_regulariza_from_mailing(df_limpo)
+    logger.info(msg)
+    final_count = len(df_limpo)
+    process_report.append({"name": "Criação de 'Cliente_Regulariza'", "initial": initial_count, "removed": initial_count - final_count, "final": final_count, "message": msg})
+
+    initial_count = len(df_limpo)
+    df_limpo, msg = _remover_por_status_de_bloqueio(df_limpo, config)
+    logger.info(msg)
+    final_count = len(df_limpo)
+    process_report.append({"name": "Filtro de Bloqueio ('bloq')", "initial": initial_count, "removed": initial_count - final_count, "final": final_count, "message": msg})
     
-    df_limpo, msg = _criar_cliente_regulariza_from_mailing(df_limpo); logger.info(msg)
-    df_limpo, msg = _remover_por_status_de_bloqueio(df_limpo, config); logger.info(msg)
     df_limpo['Data_de_Importacao'] = datetime.now().strftime('%d/%m/%Y')
-    df_limpo, msg = _aplicar_ajustes_finais(df_limpo, config); logger.info(msg)
+    df_limpo, msg = _aplicar_ajustes_finais(df_limpo, config)
+    logger.info(msg)
     
     logger.info(f"Fim da limpeza: {len(df_limpo)} registros.")
 
@@ -314,4 +322,4 @@ def processar_dados(dataframes: Dict, config: ConfigParser) -> Tuple[pd.DataFram
     
     df_humano, df_robo = _aplicar_filtros_estrategicos(df_ordenado, config)
 
-    return df_humano, df_robo
+    return (df_humano, df_robo), process_report

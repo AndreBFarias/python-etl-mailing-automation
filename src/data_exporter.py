@@ -42,23 +42,17 @@ def exportar_dados_humanos(df_humano: pd.DataFrame, config: ConfigParser, direto
         if coluna_data in df_export.columns:
             df_export[coluna_data] = pd.to_datetime(df_export[coluna_data], errors='coerce').dt.strftime('%d/%m/%Y')
     
-    # 1
-    # --- LÓGICA DE FILTRAGEM DE COLUNAS (NOVA) ---
-    # 2
     try:
         colunas_human_str = config.get('EXPORT_COLUMNS', 'human_columns')
         colunas_finais_exportacao = [col.strip() for col in colunas_human_str.replace('\n', ',').split(',') if col.strip()]
         
-        # 3
         colunas_presentes = [col for col in colunas_finais_exportacao if col in df_export.columns]
-        df_export_final = df_export[colunas_presentes]
+        df_export_final = df_export[colunas_presentes].copy() # .copy() adicionado aqui
         logger.info(f"Aplicando filtro de exportação. {len(colunas_presentes)} colunas serão salvas nos arquivos humanos.")
-    # 5
     except Exception as e:
         logger.warning(f"Não foi possível ler a configuração de colunas de exportação para arquivos humanos: {e}. Exportando todas as colunas.")
         df_export_final = df_export
 
-    # 4
     # Exporta particionado por produto
     prefixo = config.get('SETTINGS', 'output_file_prefix', fallback='Telecobranca_TOI_')
     if 'PRODUTO' in df_export_final.columns:

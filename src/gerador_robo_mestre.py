@@ -37,7 +37,6 @@ def gerar_arquivo_robo_mestre(df_robo_consolidado: pd.DataFrame, config: ConfigP
         logger.error(f"Coluna de CPF padronizada '{col_cpf_padrao}' não foi encontrada apos o pipeline. Abortando geração de arquivo robô.")
         return
 
-    # 1
     df_processado['dtvenc_dt'] = pd.to_datetime(df_processado[col_vencimento], errors='coerce', dayfirst=True)
     df_valid_dates = df_processado.dropna(subset=['dtvenc_dt']).copy()
     
@@ -59,6 +58,7 @@ def gerar_arquivo_robo_mestre(df_robo_consolidado: pd.DataFrame, config: ConfigP
     if not df_pivot.empty:
         df_agregado = pd.merge(df_agregado, df_pivot, on=col_cpf_padrao, how='left')
 
+    # 1
     colunas_finais_layout = [
         'NOME_CLIENTE', 'PRODUTO', 'CPF', 'parcelasEmAtrado', 'dtPrimeiraParcelaAtrasada',
         'dtSegundaParcelaAtrasada', 'dtTerceiraParcelaAtrasada', 'valorDivida', 'valorMinimo',
@@ -106,25 +106,29 @@ def gerar_arquivo_robo_mestre(df_robo_consolidado: pd.DataFrame, config: ConfigP
             df_final[col] = ''
     df_final = df_final.fillna('')
     
-    # 2
     try:
         colunas_robo_str = config.get('EXPORT_COLUMNS', 'robo_columns')
         colunas_finais_exportacao = [col.strip() for col in colunas_robo_str.split(',') if col.strip()]
         
-        # 3
         colunas_presentes = [col for col in colunas_finais_exportacao if col in df_final.columns]
         df_final_export = df_final[colunas_presentes]
         logger.info(f"Aplicando filtro de exportação para robô. {len(colunas_presentes)} colunas serão salvas.")
-    # 4
     except Exception as e:
         logger.warning(f"Não foi possível ler a configuração de colunas de exportação para o robô: {e}. Exportando todas as colunas.")
         df_final_export = df_final[colunas_finais_layout]
 
-    grupos_produto = {"08HRS": ['EPB', 'EFL', 'ESE'], "09HRS": ['EMT', 'EMS'], "10HRS": ['EAC', 'ERO', 'ETO']}
+    grupos_produto = {
+        "08HRS": config.get('ROBO', 'grupos_08hrs', fallback='').split(','),
+        "09HRS": config.get('ROBO', 'grupos_09hrs', fallback='').split(','),
+        "10HRS": config.get('ROBO', 'grupos_10hrs', fallback='').split(',')
+    }
     now = datetime.now()
     prefixo_robo = config.get('ROBO', 'output_file_prefix', fallback='Telecobranca_TOI_Robo_')
 
     for horario, produtos in grupos_produto.items():
+        produtos = [p.strip() for p in produtos if p.strip()]
+        if not produtos: continue
+
         df_grupo = df_final_export[df_final_export['PRODUTO'].isin(produtos)]
         if df_grupo.empty: continue
             
