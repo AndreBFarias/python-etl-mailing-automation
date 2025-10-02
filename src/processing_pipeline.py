@@ -246,19 +246,28 @@ def _aplicar_ordenacao_final(df: pd.DataFrame, config: ConfigParser) -> pd.DataF
     return df_sorted.drop(columns=['priority_level'])
 
 def _aplicar_filtros_estrategicos(df: pd.DataFrame, config: ConfigParser) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    # 2
     secao_config = 'SEGMENTACAO'
     corte_humano = config.getfloat(secao_config, 'corte_humano_maior_igual')
     col_divida = config.get(secao_config, 'coluna_divida_filtro', fallback='valorDivida')
-    if df.empty or col_divida not in df.columns: return pd.DataFrame(), pd.DataFrame()
-    df_humano = df[df[col_divida] >= corte_humano].copy()
-    df_robo = df[df[col_divida] < corte_humano].copy()
+    
+    if df.empty or col_divida not in df.columns: 
+        return pd.DataFrame(), pd.DataFrame()
+
+    # 3
+    if corte_humano == 0:
+        logger.info("Modo 'início de mês': todos os registros serão enviados para Humano e Robô.")
+        df_humano = df.copy()
+        df_robo = df.copy()
+    else:
+        df_humano = df[df[col_divida] >= corte_humano].copy()
+        df_robo = df[df[col_divida] < corte_humano].copy()
+
     logger.info(f"Segmentação final: {len(df_humano)} para humano, {len(df_robo)} para robô.")
     return df_humano, df_robo
 
 # --- FUNCAO ORQUESTRADORA (ARQUITETURA UNIFICADA E ROBUSTA) ---
-# 1. AJUSTE: A função agora retorna também a lista de relatórios.
 def processar_dados(dataframes: Dict, config: ConfigParser) -> Tuple[Tuple[pd.DataFrame, pd.DataFrame], List[Dict]]:
-    # 2. AJUSTE: Cria a lista para coletar os relatórios.
     process_report = []
     
     df_mailing = dataframes.get('mailing', pd.DataFrame())
@@ -271,7 +280,6 @@ def processar_dados(dataframes: Dict, config: ConfigParser) -> Tuple[Tuple[pd.Da
     
     df_processado = df_mailing.copy()
     
-    # 3. AJUSTE: Coleta de métricas após cada etapa de forma explícita.
     df_limpo, msg = _tratar_datas(df_processado)
     df_limpo, msg = _tratar_colunas_rebeldes(df_limpo)
     

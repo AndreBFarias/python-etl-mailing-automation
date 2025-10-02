@@ -1,9 +1,9 @@
 {
-    "last_successful_run": "2025-09-24T15:59:36.257881",
+    "last_successful_run": "2025-10-01T11:37:25.214410",
     "status": "COMPLETED",
     "last_metrics": {
-        "initial": 253219,
-        "human": 74614,
-        "robot": 9584
+        "initial": 251694,
+        "human": 81613,
+        "robot": 81613
     }
 }
