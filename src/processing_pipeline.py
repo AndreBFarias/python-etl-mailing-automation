@@ -7,11 +7,23 @@ from configparser import ConfigParser
 from datetime import datetime
 import re
 from typing import Tuple, Dict, List
+from pathlib import Path # 1. Importar a classe Path
 
 logger = logging.getLogger(__name__)
 tqdm.pandas(desc="Processando mailing")
 
 # --- FUNCOES AUXILIARES ---
+def _sanitize_encoding(text: str) -> str:
+    """Tenta corrigir problemas comuns de encoding (Mojibake)."""
+    if not isinstance(text, str):
+        return text
+    try:
+        # Tenta reverter o padrão "UTF-8 lido como latin-1"
+        return text.encode('latin1').decode('utf-8')
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        # Se a correção falhar, retorna o texto original
+        return text
+
 def _clean_phone_number(phone_val):
     if pd.isna(phone_val): return None
     phone_str = str(phone_val).split('.')[0]
@@ -180,19 +192,35 @@ def _criar_cliente_regulariza_from_mailing(df: pd.DataFrame) -> tuple:
         df['Cliente_Regulariza'] = 'NÃO'
     return df, "'Cliente_Regulariza' criada."
 
-def _remover_por_status_de_bloqueio(df: pd.DataFrame, config: ConfigParser) -> tuple:
+# 2. Função modificada para gerar o relatório de rejeição
+def _remover_por_status_de_bloqueio(df: pd.DataFrame, config: ConfigParser, output_dir: Path) -> tuple:
     coluna_filtro = config.get('SOURCE_COLUMNS', 'bloqueio').lower()
     if coluna_filtro not in df.columns:
         return df, f"Filtro de Bloqueio: Coluna '{coluna_filtro}' não encontrada. Etapa pulada."
     
     status_para_remover_str = config.get('SCHEMA_MAILING', 'status_de_bloqueio_para_remover', fallback='')
-    status_para_remover = [s.strip().lower() for s in status_para_remover_str.split('\n') if s.strip()]
+    status_para_remover = {s.strip().lower() for s in status_para_remover_str.split('\n') if s.strip()}
     
     if not status_para_remover:
         return df, "Filtro de Bloqueio: Nenhum status de bloqueio para remover definido. Etapa pulada."
 
     tamanho_inicial = len(df)
-    df_filtrado = df[~df[coluna_filtro].astype(str).str.strip().str.lower().isin(status_para_remover)]
+    
+    coluna_sanitizada = df[coluna_filtro].astype(str).apply(_sanitize_encoding).str.strip().str.lower()
+    
+    # Isola os registros a serem removidos
+    mascara_remocao = coluna_sanitizada.isin(status_para_remover)
+    df_rejeitados = df[mascara_remocao].copy()
+    df_rejeitados['motivo_remocao'] = df_rejeitados[coluna_filtro]
+    
+    # Gera o relatório se houver registros rejeitados
+    if not df_rejeitados.empty:
+        caminho_relatorio = output_dir / "rejeitados_por_status_de_bloqueio.csv"
+        colunas_relatorio = ['ncpf', 'nomecad', 'motivo_remocao']
+        df_rejeitados[colunas_relatorio].to_csv(caminho_relatorio, index=False, sep=';', encoding='utf-8-sig')
+        logger.info(f"Relatório de rejeição por status de bloqueio salvo em: {caminho_relatorio}")
+
+    df_filtrado = df[~mascara_remocao]
     removidos = tamanho_inicial - len(df_filtrado)
     return df_filtrado, f"Filtro de Bloqueio ('{coluna_filtro}'): {removidos} registros removidos."
 
@@ -246,7 +274,6 @@ def _aplicar_ordenacao_final(df: pd.DataFrame, config: ConfigParser) -> pd.DataF
     return df_sorted.drop(columns=['priority_level'])
 
 def _aplicar_filtros_estrategicos(df: pd.DataFrame, config: ConfigParser) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    # 2
     secao_config = 'SEGMENTACAO'
     corte_humano = config.getfloat(secao_config, 'corte_humano_maior_igual')
     col_divida = config.get(secao_config, 'coluna_divida_filtro', fallback='valorDivida')
@@ -254,7 +281,6 @@ def _aplicar_filtros_estrategicos(df: pd.DataFrame, config: ConfigParser) -> Tup
     if df.empty or col_divida not in df.columns: 
         return pd.DataFrame(), pd.DataFrame()
 
-    # 3
     if corte_humano == 0:
         logger.info("Modo 'início de mês': todos os registros serão enviados para Humano e Robô.")
         df_humano = df.copy()
@@ -267,7 +293,8 @@ def _aplicar_filtros_estrategicos(df: pd.DataFrame, config: ConfigParser) -> Tup
     return df_humano, df_robo
 
 # --- FUNCAO ORQUESTRADORA (ARQUITETURA UNIFICADA E ROBUSTA) ---
-def processar_dados(dataframes: Dict, config: ConfigParser) -> Tuple[Tuple[pd.DataFrame, pd.DataFrame], List[Dict]]:
+# 3. Função orquestradora modificada para passar o diretório de saída
+def processar_dados(dataframes: Dict, config: ConfigParser, output_dir: Path) -> Tuple[Tuple[pd.DataFrame, pd.DataFrame], List[Dict]]:
     process_report = []
     
     df_mailing = dataframes.get('mailing', pd.DataFrame())
@@ -314,7 +341,8 @@ def processar_dados(dataframes: Dict, config: ConfigParser) -> Tuple[Tuple[pd.Da
     process_report.append({"name": "Criação de 'Cliente_Regulariza'", "initial": initial_count, "removed": initial_count - final_count, "final": final_count, "message": msg})
 
     initial_count = len(df_limpo)
-    df_limpo, msg = _remover_por_status_de_bloqueio(df_limpo, config)
+    # 4. Passa o diretório de saída para a função de remoção
+    df_limpo, msg = _remover_por_status_de_bloqueio(df_limpo, config, output_dir)
     logger.info(msg)
     final_count = len(df_limpo)
     process_report.append({"name": "Filtro de Bloqueio ('bloq')", "initial": initial_count, "removed": initial_count - final_count, "final": final_count, "message": msg})
