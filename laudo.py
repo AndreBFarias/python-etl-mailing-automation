@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# 1
 import pandas as pd
 from pathlib import Path
 from configparser import ConfigParser
@@ -69,7 +68,6 @@ def analisar_status_entrada(config: ConfigParser) -> set:
     return status_unicos_sanitizados
 
 def analisar_arquivos_saida(config: ConfigParser, status_a_remover: set) -> dict:
-    # 2
     logging.info("--- Fase 2: Analisando arquivos de SAÍDA ---")
     output_dir = Path(config.get('PATHS', 'output_dir'))
     resultados = {}
@@ -92,7 +90,6 @@ def analisar_arquivos_saida(config: ConfigParser, status_a_remover: set) -> dict
             logging.error(f"O arquivo {latest_zip.name} está corrompido ou não é um ZIP válido.")
             return {"ERRO": f"Arquivo {latest_zip.name} corrompido."}
 
-        # O path para os arquivos pode estar dentro de uma subpasta
         pasta_base = Path(temp_dir)
         arquivos_csv = list(pasta_base.rglob("*.csv"))
 
@@ -102,12 +99,17 @@ def analisar_arquivos_saida(config: ConfigParser, status_a_remover: set) -> dict
 
         for file_path in arquivos_csv:
             logging.info(f"  -> Verificando arquivo: {file_path.name}")
+            
+            # 1
+            if file_path.name == 'rejeitados_por_status_de_bloqueio.csv':
+                logging.info(f"  -> Ignorando arquivo de relatório de rejeição: {file_path.name}")
+                continue
+            
             try:
                 sep = '|' if 'TOI_AD_FF_ENERGISA' in file_path.name else ';'
                 df_saida = pd.read_csv(file_path, sep=sep, dtype=str, encoding='utf-8-sig', on_bad_lines='warn')
                 
                 status_encontrados = set()
-                # Itera sobre todas as células do dataframe
                 for col in df_saida.columns:
                     valores_coluna = {_sanitize_encoding(str(v)).lower() for v in df_saida[col].dropna().unique()}
                     encontrados_na_coluna = valores_coluna.intersection(status_a_remover)
@@ -125,7 +127,6 @@ def analisar_arquivos_saida(config: ConfigParser, status_a_remover: set) -> dict
     return resultados
 
 def gerar_relatorio_auditoria(config: ConfigParser, status_entrada: set, resultados_saida: dict):
-    # 3
     logging.info("--- Fase 3: Gerando Relatório de Auditoria ---")
     status_a_remover_raw = config.get('SCHEMA_MAILING', 'status_de_bloqueio_para_remover', fallback='')
     status_a_remover = {s.strip().lower() for s in status_a_remover_raw.split('\n') if s.strip()}
@@ -167,7 +168,6 @@ def gerar_relatorio_auditoria(config: ConfigParser, status_entrada: set, resulta
     logging.info("Relatório 'RELATORIO_AUDITORIA_COMPLETA.md' gerado com sucesso.")
 
 def main():
-    # 4
     """Função principal que orquestra todo o processo de auditoria."""
     config = carregar_config()
     if not config:
